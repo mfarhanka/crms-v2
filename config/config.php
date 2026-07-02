@@ -233,6 +233,43 @@ function ensureMaintenanceSchema($conn) {
     }
 }
 
+function ensureCustomerPortalSchema($conn) {
+    if (!tableColumnExists($conn, 'customers', 'access_token')) {
+        $conn->query("ALTER TABLE customers ADD COLUMN access_token VARCHAR(64) NULL AFTER psv_back_photo");
+    }
+
+    $token_result = $conn->query("SELECT id FROM customers WHERE access_token IS NULL OR access_token = ''");
+    while ($customer = $token_result->fetch_assoc()) {
+        $token = bin2hex(random_bytes(24));
+        $stmt = $conn->prepare("UPDATE customers SET access_token = ? WHERE id = ?");
+        $stmt->bind_param("si", $token, $customer['id']);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    if (!tableExists($conn, 'maintenance_claims')) {
+        $conn->query("CREATE TABLE maintenance_claims (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            customer_id INT NOT NULL,
+            rental_id INT NOT NULL,
+            car_id INT NOT NULL,
+            claim_date DATE NOT NULL,
+            expense_category ENUM('maintenance', 'cleaning', 'repair', 'parts_replacement', 'accessory', 'inspection', 'other') NOT NULL DEFAULT 'maintenance',
+            description VARCHAR(150) NOT NULL,
+            vendor VARCHAR(100),
+            amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+            receipt_photo VARCHAR(255),
+            status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+            admin_notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+            FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE,
+            FOREIGN KEY (car_id) REFERENCES cars(id) ON DELETE CASCADE
+        )");
+    }
+}
+
 function paymentFrequencyLabel($frequency) {
     $labels = [
         'daily' => 'Daily',

@@ -4,6 +4,7 @@ requireLogin();
 
 $page_title = 'Customers Management';
 $conn = getDBConnection();
+ensureCustomerPortalSchema($conn);
 $user_id = intval($_SESSION['user_id']);
 $form_error = '';
 $open_modal = '';
@@ -190,6 +191,7 @@ include 'includes/header.php';
                         <th>Email</th>
                         <th>Phone</th>
                         <th>License Number</th>
+                        <th>Portal</th>
                         <?php if (isAdmin()): ?>
                         <th>Added By</th>
                         <?php endif; ?>
@@ -203,6 +205,12 @@ include 'includes/header.php';
                         <td><?php echo $customer['email'] ?: 'N/A'; ?></td>
                         <td><?php echo $customer['phone']; ?></td>
                         <td><?php echo $customer['license_number'] ?: 'N/A'; ?></td>
+                        <td>
+                            <?php $portal_url = SITE_URL . 'customer_portal.php?token=' . urlencode($customer['access_token'] ?? ''); ?>
+                            <a href="<?php echo htmlspecialchars($portal_url, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" class="btn btn-sm btn-info">
+                                <i class="bi bi-box-arrow-up-right me-1"></i>Open
+                            </a>
+                        </td>
                         <?php if (isAdmin()): ?>
                         <td><?php echo $customer['company_name'] ?? $customer['agent_name']; ?></td>
                         <?php endif; ?>

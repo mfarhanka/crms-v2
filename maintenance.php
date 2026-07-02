@@ -5,6 +5,7 @@ requireAdmin();
 $page_title = 'Vehicle Expenses';
 $conn = getDBConnection();
 ensureMaintenanceSchema($conn);
+ensureCustomerPortalSchema($conn);
 
 $error = '';
 $success = '';
@@ -120,8 +121,35 @@ function maintenanceStatusClass($status) {
     return $classes[$status] ?? 'bg-warning';
 }
 
+function claimStatusClass($status) {
+    if ($status === 'approved') {
+        return 'bg-success';
+    }
+    if ($status === 'rejected') {
+        return 'bg-danger';
+    }
+    return 'bg-warning text-dark';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $maintenance_action = sanitize($_POST['maintenance_action'] ?? '');
+
+    if ($maintenance_action === 'update_claim') {
+        $claim_id = intval($_POST['claim_id'] ?? 0);
+        $claim_status = maintenanceInput($_POST['claim_status'] ?? 'pending');
+        $admin_notes = maintenanceInput($_POST['admin_notes'] ?? '');
+        $allowed_claim_statuses = ['pending', 'approved', 'rejected'];
+
+        if (in_array($claim_status, $allowed_claim_statuses, true)) {
+            $stmt = $conn->prepare("UPDATE maintenance_claims SET status = ?, admin_notes = ? WHERE id = ?");
+            $stmt->bind_param("ssi", $claim_status, $admin_notes, $claim_id);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        header('Location: maintenance.php#customerClaims');
+        exit();
+    }
 
     if ($maintenance_action === 'create' || $maintenance_action === 'update') {
         $record_id = intval($_POST['record_id'] ?? 0);
@@ -305,11 +333,25 @@ while ($record = $records_result->fetch_assoc()) {
     $records[] = $record;
 }
 
+$claims_result = $conn->query("SELECT mc.*, cu.full_name AS customer_name, cu.phone AS customer_phone,
+                                      c.brand, c.model, c.plate_number,
+                                      u.company_name, u.full_name AS agent_name
+                               FROM maintenance_claims mc
+                               JOIN customers cu ON mc.customer_id = cu.id
+                               JOIN cars c ON mc.car_id = c.id
+                               JOIN users u ON cu.user_id = u.id
+                               ORDER BY mc.created_at DESC");
+$claims = [];
+while ($claim = $claims_result->fetch_assoc()) {
+    $claims[] = $claim;
+}
+
 $total_spent = $conn->query("SELECT COALESCE(SUM(cost), 0) AS total FROM maintenance_records")->fetch_assoc()['total'] ?? 0;
 $maintenance_spent = $conn->query("SELECT COALESCE(SUM(cost), 0) AS total FROM maintenance_records WHERE expense_category IN ('maintenance', 'repair', 'parts_replacement', 'inspection')")->fetch_assoc()['total'] ?? 0;
 $loan_spent = $conn->query("SELECT COALESCE(SUM(cost), 0) AS total FROM maintenance_records WHERE expense_category = 'loan_installment'")->fetch_assoc()['total'] ?? 0;
 $active_count = $conn->query("SELECT COUNT(*) AS count FROM maintenance_records WHERE status IN ('sent', 'in_progress')")->fetch_assoc()['count'] ?? 0;
 $completed_count = $conn->query("SELECT COUNT(*) AS count FROM maintenance_records WHERE status = 'completed'")->fetch_assoc()['count'] ?? 0;
+$pending_claims = $conn->query("SELECT COUNT(*) AS count FROM maintenance_claims WHERE status = 'pending'")->fetch_assoc()['count'] ?? 0;
 
 include 'includes/header.php';
 ?>
@@ -368,6 +410,14 @@ include 'includes/header.php';
             <div class="card-body">
                 <p class="text-muted mb-1">Active / Completed</p>
                 <h3 class="mb-0"><?php echo e($active_count . ' / ' . $completed_count); ?></h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <p class="text-muted mb-1">Pending Claims</p>
+                <h3 class="mb-0"><?php echo e($pending_claims); ?></h3>
             </div>
         </div>
     </div>
@@ -447,6 +497,80 @@ include 'includes/header.php';
                 <i class="bi bi-plus-circle me-2"></i>Add Expense
             </button>
         </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm mt-4" id="customerClaims">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Customer Maintenance Claims</h5>
+        <span class="badge bg-warning text-dark"><?php echo e($pending_claims); ?> Pending</span>
+    </div>
+    <div class="card-body">
+        <?php if (count($claims) > 0): ?>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Customer</th>
+                        <th>Car</th>
+                        <th>Category</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Receipt</th>
+                        <th>Status</th>
+                        <th>Review</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($claims as $claim): ?>
+                    <tr>
+                        <td><?php echo e(formatDate($claim['claim_date'])); ?></td>
+                        <td>
+                            <strong><?php echo e($claim['customer_name']); ?></strong><br>
+                            <small class="text-muted"><?php echo e($claim['customer_phone']); ?></small>
+                        </td>
+                        <td>
+                            <strong><?php echo e($claim['plate_number']); ?></strong><br>
+                            <small class="text-muted"><?php echo e($claim['brand'] . ' ' . $claim['model']); ?></small>
+                        </td>
+                        <td><?php echo e(maintenanceCategoryLabel($claim['expense_category'])); ?></td>
+                        <td>
+                            <?php echo e($claim['description']); ?><br>
+                            <small class="text-muted"><?php echo e($claim['vendor'] ?: 'No vendor'); ?></small>
+                        </td>
+                        <td><strong><?php echo e(formatCurrency($claim['amount'])); ?></strong></td>
+                        <td>
+                            <?php if (!empty($claim['receipt_photo'])): ?>
+                            <a href="<?php echo e('uploads/receipts/' . $claim['receipt_photo']); ?>" target="_blank" class="btn btn-sm btn-info">
+                                <i class="bi bi-receipt me-1"></i>Receipt
+                            </a>
+                            <?php else: ?>
+                            <span class="text-muted">-</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><span class="badge <?php echo e(claimStatusClass($claim['status'])); ?>"><?php echo e(ucfirst($claim['status'])); ?></span></td>
+                        <td>
+                            <form method="POST" action="maintenance.php#customerClaims" class="d-flex flex-wrap gap-2">
+                                <input type="hidden" name="maintenance_action" value="update_claim">
+                                <input type="hidden" name="claim_id" value="<?php echo e($claim['id']); ?>">
+                                <select name="claim_status" class="form-select form-select-sm" style="max-width: 130px;">
+                                    <option value="pending" <?php echo $claim['status'] === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                                    <option value="approved" <?php echo $claim['status'] === 'approved' ? 'selected' : ''; ?>>Approved</option>
+                                    <option value="rejected" <?php echo $claim['status'] === 'rejected' ? 'selected' : ''; ?>>Rejected</option>
+                                </select>
+                                <input type="text" name="admin_notes" value="<?php echo e($claim['admin_notes'] ?? ''); ?>" class="form-control form-control-sm" placeholder="Notes" style="max-width: 180px;">
+                                <button type="submit" class="btn btn-sm btn-dark">Save</button>
+                            </form>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php else: ?>
+        <p class="text-muted text-center py-4 mb-0">No customer maintenance claims found.</p>
         <?php endif; ?>
     </div>
 </div>

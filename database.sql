@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS customers (
     license_back_photo VARCHAR(255),
     psv_front_photo VARCHAR(255),
     psv_back_photo VARCHAR(255),
+    access_token VARCHAR(64),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -119,6 +120,27 @@ CREATE TABLE IF NOT EXISTS maintenance_records (
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (car_id) REFERENCES cars(id) ON DELETE CASCADE
+);
+
+-- Customer submitted maintenance claims
+CREATE TABLE IF NOT EXISTS maintenance_claims (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    customer_id INT NOT NULL,
+    rental_id INT NOT NULL,
+    car_id INT NOT NULL,
+    claim_date DATE NOT NULL,
+    expense_category ENUM('maintenance', 'cleaning', 'repair', 'parts_replacement', 'accessory', 'inspection', 'other') NOT NULL DEFAULT 'maintenance',
+    description VARCHAR(150) NOT NULL,
+    vendor VARCHAR(100),
+    amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+    receipt_photo VARCHAR(255),
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+    admin_notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+    FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE,
     FOREIGN KEY (car_id) REFERENCES cars(id) ON DELETE CASCADE
 );
 
