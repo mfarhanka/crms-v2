@@ -72,7 +72,7 @@ $document_index = 0;
         <label class="form-label"><?php echo $field_label; ?></label>
         <?php if (!empty($customer_form[$field_name])): ?>
         <div class="mb-2">
-            <a href="uploads/customers/<?php echo $customer_form[$field_name]; ?>" target="_blank" class="btn btn-sm btn-outline-info">
+            <a href="uploads/customers/<?php echo $customer_form[$field_name]; ?>" target="_blank" class="btn btn-sm btn-info">
                 <i class="bi bi-file-earmark-image"></i> View Current
             </a>
         </div>

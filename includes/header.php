@@ -25,7 +25,7 @@
     ?>
     <nav class="navbar navbar-dark bg-dark shadow-sm app-topbar">
         <div class="container-fluid">
-            <button class="btn btn-outline-light d-lg-none me-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileSidebar" aria-controls="mobileSidebar" aria-label="Open menu">
+            <button class="btn btn-light d-lg-none me-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileSidebar" aria-controls="mobileSidebar" aria-label="Open menu">
                 <i class="bi bi-list"></i>
             </button>
             <a class="navbar-brand" href="dashboard.php">

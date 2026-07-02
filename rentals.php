@@ -488,9 +488,9 @@ include 'includes/header.php';
                         <td><?php echo formatCurrency($rental['total_paid']); ?><br><small class="text-muted"><?php echo ucfirst($rental['payment_status']); ?></small></td>
                         <td><span class="badge <?php echo $rental['status'] == 'active' ? 'bg-primary' : ($rental['status'] == 'completed' ? 'bg-success' : 'bg-danger'); ?>"><?php echo ucfirst($rental['status']); ?></span></td>
                         <td>
-                            <button type="button" class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#viewRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-eye"></i></button>
-                            <button type="button" class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#editRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-pencil"></i></button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-trash"></i></button>
+                            <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#viewRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#editRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-pencil"></i></button>
+                            <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-trash"></i></button>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -598,7 +598,7 @@ include 'includes/header.php';
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="submit" class="btn btn-dark"><i class="bi bi-plus-circle me-2"></i>Create Rental</button>
             </div>
         </form>
@@ -644,7 +644,7 @@ include 'includes/header.php';
                                 <td><?php echo $record['status'] == 'paid' ? formatCurrency($record['amount_paid']) . '<br><small class="text-muted">' . formatDate($record['paid_date']) . '</small>' : '-'; ?></td>
                                 <td>
                                     <?php if (!empty($record['receipt_photo'])): ?>
-                                    <button type="button" class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#receiptModal<?php echo $record['id']; ?>">
+                                    <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#receiptModal<?php echo $record['id']; ?>">
                                         <i class="bi bi-receipt me-1"></i>Receipt
                                     </button>
                                     <?php else: ?>
@@ -661,14 +661,14 @@ include 'includes/header.php';
                                             <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
                                             <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
                                             <input type="file" name="receipt_photo" accept="image/*,.pdf" class="form-control form-control-sm" style="max-width: 220px;" required>
-                                            <button type="submit" class="btn btn-sm btn-outline-info">Upload Receipt</button>
+                                            <button type="submit" class="btn btn-sm btn-info">Upload Receipt</button>
                                         </form>
                                         <?php endif; ?>
                                         <form method="POST" action="rentals.php" class="d-inline">
                                             <input type="hidden" name="rental_action" value="mark_pending">
                                             <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
                                             <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-warning">Mark Pending</button>
+                                            <button type="submit" class="btn btn-sm btn-warning">Mark Pending</button>
                                         </form>
                                     </div>
                                     <?php else: ?>
@@ -689,7 +689,7 @@ include 'includes/header.php';
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>
@@ -809,7 +809,7 @@ include 'includes/header.php';
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="submit" class="btn btn-dark">Update Rental</button>
             </div>
         </form>
@@ -829,7 +829,7 @@ include 'includes/header.php';
                 <p class="mb-0">Delete rental for <strong><?php echo $rental['customer_name']; ?></strong> using <strong><?php echo $rental['plate_number']; ?></strong>?</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="submit" class="btn btn-danger"><i class="bi bi-trash me-2"></i>Delete</button>
             </div>
         </form>
@@ -859,10 +859,10 @@ $receipt_ext = strtolower(pathinfo($record['receipt_photo'], PATHINFO_EXTENSION)
                 <?php endif; ?>
             </div>
             <div class="modal-footer">
-                <a href="<?php echo $receipt_path; ?>" target="_blank" class="btn btn-outline-dark">
+                <a href="<?php echo $receipt_path; ?>" target="_blank" class="btn btn-dark">
                     <i class="bi bi-box-arrow-up-right me-2"></i>Open File
                 </a>
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>

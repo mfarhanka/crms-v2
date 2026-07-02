@@ -339,20 +339,20 @@ include 'includes/header.php';
                         </td>
                         <td><?php echo e(formatDate($admin['created_at'])); ?></td>
                         <td>
-                            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editAdminModal<?php echo e($admin['id']); ?>" title="Edit admin">
+                            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#editAdminModal<?php echo e($admin['id']); ?>" title="Edit admin">
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form method="POST" action="" class="d-inline">
                                 <input type="hidden" name="admin_action" value="toggle_admin_status">
                                 <input type="hidden" name="admin_id" value="<?php echo e($admin['id']); ?>">
-                                <button type="submit" class="btn btn-sm btn-outline-warning" title="<?php echo $admin['status'] == 'active' ? 'Suspend admin' : 'Activate admin'; ?>" onclick="return confirm('Are you sure you want to change this admin status?');">
+                                <button type="submit" class="btn btn-sm btn-warning" title="<?php echo $admin['status'] == 'active' ? 'Suspend admin' : 'Activate admin'; ?>" onclick="return confirm('Are you sure you want to change this admin status?');">
                                     <i class="bi <?php echo $admin['status'] == 'active' ? 'bi-pause-circle' : 'bi-play-circle'; ?>"></i>
                                 </button>
                             </form>
                             <form method="POST" action="" class="d-inline">
                                 <input type="hidden" name="admin_action" value="delete_admin">
                                 <input type="hidden" name="admin_id" value="<?php echo e($admin['id']); ?>">
-                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Remove admin" onclick="return confirm('Are you sure you want to remove this admin account?');">
+                                <button type="submit" class="btn btn-sm btn-danger" title="Remove admin" onclick="return confirm('Are you sure you want to remove this admin account?');">
                                     <i class="bi bi-trash"></i>
                                 </button>
                             </form>
@@ -423,7 +423,7 @@ include 'includes/header.php';
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-dark">Save Changes</button>
                 </div>
             </form>
@@ -479,7 +479,7 @@ include 'includes/header.php';
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="submit" class="btn btn-dark">Create Admin</button>
                 </div>
             </form>
@@ -531,11 +531,11 @@ include 'includes/header.php';
                         </td>
                         <td><?php echo e(formatDate($user['created_at'])); ?></td>
                         <td>
-                            <a href="admin.php?toggle_status=<?php echo e($user['id']); ?>" class="btn btn-sm btn-outline-warning"
+                            <a href="admin.php?toggle_status=<?php echo e($user['id']); ?>" class="btn btn-sm btn-warning"
                                onclick="return confirm('Are you sure you want to toggle this user status?');">
                                 <i class="bi bi-toggle-on"></i>
                             </a>
-                            <a href="admin.php?delete_user=<?php echo e($user['id']); ?>" class="btn btn-sm btn-outline-danger"
+                            <a href="admin.php?delete_user=<?php echo e($user['id']); ?>" class="btn btn-sm btn-danger"
                                onclick="return confirm('Are you sure you want to delete this user? All their data will be removed.');">
                                 <i class="bi bi-trash"></i>
                             </a>

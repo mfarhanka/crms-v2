@@ -143,7 +143,7 @@ include 'includes/header.php';
                         <button type="submit" class="btn btn-dark">
                             <i class="bi bi-check-circle me-2"></i>Update Profile
                         </button>
-                        <a href="dashboard.php" class="btn btn-outline-secondary">Cancel</a>
+                        <a href="dashboard.php" class="btn btn-secondary">Cancel</a>
                     </div>
                 </form>
             </div>

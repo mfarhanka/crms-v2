@@ -207,10 +207,10 @@ include 'includes/header.php';
                         <td><?php echo $customer['company_name'] ?? $customer['agent_name']; ?></td>
                         <?php endif; ?>
                         <td>
-                            <button type="button" class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#editCustomerModal<?php echo $customer['id']; ?>">
+                            <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#editCustomerModal<?php echo $customer['id']; ?>">
                                 <i class="bi bi-pencil"></i>
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteCustomerModal<?php echo $customer['id']; ?>">
+                            <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteCustomerModal<?php echo $customer['id']; ?>">
                                 <i class="bi bi-trash"></i>
                             </button>
                         </td>
@@ -244,7 +244,7 @@ include 'includes/header.php';
                 <?php include __DIR__ . '/includes/customer_form_fields.php'; ?>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="submit" class="btn btn-dark">
                     <i class="bi bi-plus-circle me-2"></i>Add Customer
                 </button>
@@ -268,7 +268,7 @@ include 'includes/header.php';
                 <?php include __DIR__ . '/includes/customer_form_fields.php'; ?>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="submit" class="btn btn-dark">
                     <i class="bi bi-check-circle me-2"></i>Update Customer
                 </button>
@@ -290,7 +290,7 @@ include 'includes/header.php';
                 <p class="mb-0">Delete <strong><?php echo $customer['full_name']; ?></strong>?</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="submit" class="btn btn-danger">
                     <i class="bi bi-trash me-2"></i>Delete
                 </button>
