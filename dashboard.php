@@ -5,6 +5,7 @@ requireLogin();
 $page_title = 'Dashboard';
 $conn = getDBConnection();
 ensureRentalSchema($conn);
+ensureMaintenanceSchema($conn);
 
 if (isAdmin()) {
     $total_cars = $conn->query("SELECT COUNT(*) as count FROM cars")->fetch_assoc()['count'];
@@ -16,6 +17,7 @@ if (isAdmin()) {
                                       FROM rental_payment_records pr
                                       JOIN rentals r ON pr.rental_id = r.id
                                       WHERE pr.status = 'pending' AND r.status = 'active'")->fetch_assoc()['count'];
+    $total_maintenance_spent = $conn->query("SELECT COALESCE(SUM(cost), 0) as total FROM maintenance_records WHERE expense_category IN ('maintenance', 'repair', 'parts_replacement', 'inspection')")->fetch_assoc()['total'] ?? 0;
     $recent_cars = $conn->query("SELECT c.*, u.company_name, u.full_name
                                  FROM cars c
                                  JOIN users u ON c.user_id = u.id
@@ -28,6 +30,7 @@ if (isAdmin()) {
     $total_customers = $conn->query("SELECT COUNT(*) as count FROM customers WHERE user_id = $user_id")->fetch_assoc()['count'];
     $active_rentals = 0;
     $pending_payments = 0;
+    $total_maintenance_spent = 0;
     $recent_cars = $conn->query("SELECT * FROM cars WHERE user_id = $user_id ORDER BY created_at DESC LIMIT 5");
 }
 
@@ -133,6 +136,22 @@ include 'includes/header.php';
                     </div>
                     <div class="bg-danger bg-opacity-10 p-3 rounded">
                         <i class="bi bi-clock-history fs-2 text-danger"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <p class="text-muted mb-1">Maintenance / Repairs</p>
+                        <h3 class="mb-0"><?php echo formatCurrency($total_maintenance_spent); ?></h3>
+                    </div>
+                    <div class="bg-secondary bg-opacity-10 p-3 rounded">
+                        <i class="bi bi-cash-coin fs-2 text-secondary"></i>
                     </div>
                 </div>
             </div>

@@ -16,6 +16,7 @@
         'cars' => ['cars.php'],
         'customers' => ['customers.php'],
         'rentals' => ['rentals.php'],
+        'maintenance' => ['maintenance.php'],
         'admin' => ['admin.php'],
     ];
 
@@ -64,6 +65,9 @@
             <a class="sidebar-link <?php echo $is_active_section('rentals'); ?>" href="rentals.php">
                 <i class="bi bi-clipboard-check"></i><span>Rentals</span>
             </a>
+            <a class="sidebar-link <?php echo $is_active_section('maintenance'); ?>" href="maintenance.php">
+                <i class="bi bi-receipt-cutoff"></i><span>Vehicle Expenses</span>
+            </a>
             <?php endif; ?>
             <?php if (isAdmin()): ?>
             <a class="sidebar-link <?php echo $is_active_section('admin'); ?>" href="admin.php">
@@ -94,6 +98,9 @@
                 <?php if (isAdmin()): ?>
                 <a class="sidebar-link <?php echo $is_active_section('rentals'); ?>" href="rentals.php">
                     <i class="bi bi-clipboard-check"></i><span>Rentals</span>
+                </a>
+                <a class="sidebar-link <?php echo $is_active_section('maintenance'); ?>" href="maintenance.php">
+                    <i class="bi bi-receipt-cutoff"></i><span>Vehicle Expenses</span>
                 </a>
                 <?php endif; ?>
                 <?php if (isAdmin()): ?>

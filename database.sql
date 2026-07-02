@@ -105,6 +105,23 @@ CREATE TABLE IF NOT EXISTS rental_payment_records (
     FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE
 );
 
+-- Vehicle expense and maintenance records
+CREATE TABLE IF NOT EXISTS maintenance_records (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    car_id INT NOT NULL,
+    expense_category ENUM('maintenance', 'cleaning', 'repair', 'parts_replacement', 'accessory', 'loan_installment', 'insurance_roadtax', 'fuel_toll_parking', 'inspection', 'other') NOT NULL DEFAULT 'maintenance',
+    service_date DATE NOT NULL,
+    service_type VARCHAR(100) NOT NULL,
+    vendor VARCHAR(100),
+    cost DECIMAL(10,2) NOT NULL DEFAULT 0,
+    status ENUM('sent', 'in_progress', 'completed') DEFAULT 'sent',
+    receipt_photo VARCHAR(255),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (car_id) REFERENCES cars(id) ON DELETE CASCADE
+);
+
 -- Insert default admin account
 -- Password: admin123 (hashed)
 INSERT INTO users (username, email, password, full_name, role) VALUES

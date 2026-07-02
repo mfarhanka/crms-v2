@@ -5,6 +5,7 @@ requireAdmin();
 $page_title = 'Admin Panel';
 $conn = getDBConnection();
 ensureRentalSchema($conn);
+ensureMaintenanceSchema($conn);
 $error = '';
 $success = '';
 
@@ -211,6 +212,7 @@ $total_admins = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = '
 $total_cars = $conn->query("SELECT COUNT(*) as count FROM cars")->fetch_assoc()['count'];
 $total_rentals = $conn->query("SELECT COUNT(*) as count FROM rentals")->fetch_assoc()['count'];
 $total_revenue = $conn->query("SELECT SUM(total_paid) as total FROM rentals")->fetch_assoc()['total'] ?? 0;
+$total_maintenance_spent = $conn->query("SELECT COALESCE(SUM(cost), 0) as total FROM maintenance_records")->fetch_assoc()['total'] ?? 0;
 
 include 'includes/header.php';
 ?>
@@ -293,6 +295,22 @@ include 'includes/header.php';
                     </div>
                     <div class="bg-success bg-opacity-10 p-3 rounded">
                         <i class="bi bi-currency-dollar fs-2 text-success"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <p class="text-muted mb-1">Maintenance Spent</p>
+                        <h3 class="mb-0"><?php echo e(formatCurrency($total_maintenance_spent)); ?></h3>
+                    </div>
+                    <div class="bg-secondary bg-opacity-10 p-3 rounded">
+                        <i class="bi bi-cash-coin fs-2 text-secondary"></i>
                     </div>
                 </div>
             </div>
