@@ -192,6 +192,12 @@ function ensureRentalSchema($conn) {
             amount_paid DECIMAL(10,2) NOT NULL DEFAULT 0,
             paid_date DATE,
             receipt_photo VARCHAR(255),
+            customer_receipt_photo VARCHAR(255),
+            customer_paid_date DATE,
+            customer_amount_paid DECIMAL(10,2) NOT NULL DEFAULT 0,
+            customer_payment_status ENUM('none', 'pending', 'approved', 'rejected') DEFAULT 'none',
+            customer_payment_notes TEXT,
+            admin_payment_notes TEXT,
             status ENUM('pending', 'paid') DEFAULT 'pending',
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -202,6 +208,30 @@ function ensureRentalSchema($conn) {
 
     if (!tableColumnExists($conn, 'rental_payment_records', 'receipt_photo')) {
         $conn->query("ALTER TABLE rental_payment_records ADD COLUMN receipt_photo VARCHAR(255) AFTER paid_date");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'customer_receipt_photo')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN customer_receipt_photo VARCHAR(255) AFTER receipt_photo");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'customer_paid_date')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN customer_paid_date DATE AFTER customer_receipt_photo");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'customer_amount_paid')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN customer_amount_paid DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER customer_paid_date");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'customer_payment_status')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN customer_payment_status ENUM('none', 'pending', 'approved', 'rejected') DEFAULT 'none' AFTER customer_amount_paid");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'customer_payment_notes')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN customer_payment_notes TEXT AFTER customer_payment_status");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'admin_payment_notes')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN admin_payment_notes TEXT AFTER customer_payment_notes");
     }
 }
 

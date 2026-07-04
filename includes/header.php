@@ -32,19 +32,13 @@
             <a class="navbar-brand" href="dashboard.php">
                 <i class="bi bi-car-front-fill me-2"></i>Car Rental System
             </a>
-            <div class="ms-auto">
-                <ul class="navbar-nav flex-row">
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle me-1"></i><?php echo $_SESSION['full_name']; ?>
-                        </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="profile.php"><i class="bi bi-person me-2"></i>Profile</a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="logout.php"><i class="bi bi-box-arrow-right me-2"></i>Logout</a></li>
-                        </ul>
-                    </li>
-                </ul>
+            <div class="ms-auto d-flex align-items-center gap-2">
+                <span class="navbar-text text-white">
+                    <i class="bi bi-person-circle me-1"></i><?php echo htmlspecialchars($_SESSION['full_name'], ENT_QUOTES, 'UTF-8'); ?>
+                </span>
+                <a href="logout.php" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-box-arrow-right me-1"></i>Logout
+                </a>
             </div>
         </div>
     </nav>

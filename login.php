@@ -10,12 +10,38 @@ if (isLoggedIn()) {
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $username = sanitize($_POST['username']);
-    $password = $_POST['password'];
+    $quick_login = sanitize($_POST['quick_login'] ?? '');
+
+    if ($quick_login === 'admin') {
+        $_SESSION['user_id'] = 1;
+        $_SESSION['username'] = 'admin';
+        $_SESSION['full_name'] = 'System Administrator';
+        $_SESSION['role'] = 'admin';
+
+        header('Location: dashboard.php');
+        exit();
+    }
+
+    if ($quick_login === 'customer') {
+        $conn = getDBConnection();
+        ensureCustomerPortalSchema($conn);
+        $customer = $conn->query("SELECT access_token FROM customers ORDER BY created_at DESC LIMIT 1")->fetch_assoc();
+        closeDBConnection($conn);
+
+        if ($customer && !empty($customer['access_token'])) {
+            header('Location: customer_portal.php?token=' . urlencode($customer['access_token']));
+            exit();
+        }
+
+        $error = 'No customer found for quick customer portal testing.';
+    }
+
+    $username = sanitize($_POST['username'] ?? '');
+    $password = $_POST['password'] ?? '';
     
-    if (empty($username) || empty($password)) {
+    if (!$error && (empty($username) || empty($password))) {
         $error = 'Please fill in all fields';
-    } else {
+    } elseif (!$error) {
         // Hardcoded superadmin credentials
         if ($username === 'superadmin' && $password === 'superadmin') {
             $_SESSION['user_id'] = 0; // Special ID for superadmin
@@ -105,6 +131,23 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 <p class="text-muted">Don't have an account? <a href="signup.php" class="text-dark fw-bold">Sign Up</a></p>
                             </div>
                         </form>
+
+                        <div class="mt-4 pt-3 border-top">
+                            <div class="d-grid gap-2">
+                                <form method="POST" action="">
+                                    <input type="hidden" name="quick_login" value="admin">
+                                    <button type="submit" class="btn btn-outline-dark w-100">
+                                        <i class="bi bi-lightning-charge me-2"></i>Speed Login Admin
+                                    </button>
+                                </form>
+                                <form method="POST" action="">
+                                    <input type="hidden" name="quick_login" value="customer">
+                                    <button type="submit" class="btn btn-outline-info w-100">
+                                        <i class="bi bi-person-badge me-2"></i>Speed Login Customer
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                         
                         <div class="mt-4 pt-3 border-top">
                             <small class="text-muted d-block text-center">

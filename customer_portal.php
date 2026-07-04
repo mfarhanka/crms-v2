@@ -62,6 +62,32 @@ function uploadClaimReceipt($field_name) {
     return $receipt_photo;
 }
 
+function paymentProofStatusLabel($status) {
+    if ($status === 'approved') {
+        return 'Approved';
+    }
+    if ($status === 'rejected') {
+        return 'Rejected';
+    }
+    if ($status === 'pending') {
+        return 'Waiting Review';
+    }
+    return 'Not Submitted';
+}
+
+function paymentProofStatusClass($status) {
+    if ($status === 'approved') {
+        return 'bg-success';
+    }
+    if ($status === 'rejected') {
+        return 'bg-danger';
+    }
+    if ($status === 'pending') {
+        return 'bg-warning text-dark';
+    }
+    return 'bg-secondary';
+}
+
 $token = portalInput($_GET['token'] ?? $_POST['token'] ?? '');
 $customer = null;
 $error = '';
@@ -103,7 +129,51 @@ $customer_id = intval($customer['id']);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $portal_action = portalInput($_POST['portal_action'] ?? '');
 
-    if ($portal_action === 'submit_claim') {
+    if ($portal_action === 'upload_payment_receipt') {
+        $record_id = intval($_POST['record_id'] ?? 0);
+        $paid_date = portalInput($_POST['paid_date'] ?? date('Y-m-d'));
+        $amount_paid = floatval($_POST['amount_paid'] ?? 0);
+        $payment_notes = portalInput($_POST['payment_notes'] ?? '');
+
+        $record_stmt = $conn->prepare("SELECT pr.id, pr.amount_due
+                                       FROM rental_payment_records pr
+                                       JOIN rentals r ON pr.rental_id = r.id
+                                       WHERE pr.id = ?
+                                         AND r.customer_id = ?
+                                         AND pr.status = 'pending'");
+        $record_stmt->bind_param("ii", $record_id, $customer_id);
+        $record_stmt->execute();
+        $payment_record = $record_stmt->get_result()->fetch_assoc();
+        $record_stmt->close();
+
+        if (!$payment_record || $paid_date === '') {
+            $error = 'Selected unpaid record was not found.';
+        } else {
+            if ($amount_paid <= 0) {
+                $amount_paid = floatval($payment_record['amount_due']);
+            }
+
+            $receipt_photo = uploadClaimReceipt('receipt_photo');
+            if (!$receipt_photo) {
+                $error = 'Please upload a valid receipt file.';
+            } else {
+                $stmt = $conn->prepare("UPDATE rental_payment_records
+                                        SET customer_receipt_photo = ?,
+                                            customer_paid_date = ?,
+                                            customer_amount_paid = ?,
+                                            customer_payment_status = 'pending',
+                                            customer_payment_notes = ?,
+                                            admin_payment_notes = NULL
+                                        WHERE id = ?");
+                $stmt->bind_param("ssdsi", $receipt_photo, $paid_date, $amount_paid, $payment_notes, $record_id);
+                $stmt->execute();
+                $stmt->close();
+
+                header('Location: customer_portal.php?token=' . urlencode($token) . '&payment_submitted=1');
+                exit();
+            }
+        }
+    } elseif ($portal_action === 'submit_claim') {
         $rental_id = intval($_POST['rental_id'] ?? 0);
         $claim_date = portalInput($_POST['claim_date'] ?? date('Y-m-d'));
         $expense_category = portalInput($_POST['expense_category'] ?? 'maintenance');
@@ -143,6 +213,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 if (isset($_GET['submitted'])) {
     $success = 'Claim submitted. The office will review it.';
+}
+if (isset($_GET['payment_submitted'])) {
+    $success = 'Payment receipt uploaded. The office will review it.';
 }
 
 $rentals = [];
@@ -207,6 +280,9 @@ $active_rentals = array_filter($rentals, function($rental) {
     <nav class="navbar navbar-dark bg-dark shadow-sm">
         <div class="container-fluid">
             <span class="navbar-brand"><i class="bi bi-car-front-fill me-2"></i>Customer Portal</span>
+            <a href="login.php" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-box-arrow-right me-1"></i>Logout
+            </a>
         </div>
     </nav>
 
@@ -272,7 +348,9 @@ $active_rentals = array_filter($rentals, function($rental) {
                                 <th>Period</th>
                                 <th>Due Date</th>
                                 <th>Amount</th>
+                                <th>Receipt Review</th>
                                 <th>Status</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -282,7 +360,13 @@ $active_rentals = array_filter($rentals, function($rental) {
                                 <td><?php echo e(formatDate($record['period_start'])); ?> - <?php echo e(formatDate($record['period_end'])); ?></td>
                                 <td><?php echo e(formatDate($record['due_date'])); ?></td>
                                 <td><strong><?php echo e(formatCurrency($record['amount_due'])); ?></strong></td>
+                                <td><span class="badge <?php echo e(paymentProofStatusClass($record['customer_payment_status'] ?? 'none')); ?>"><?php echo e(paymentProofStatusLabel($record['customer_payment_status'] ?? 'none')); ?></span></td>
                                 <td><span class="badge bg-danger">Pending</span></td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#paymentReceiptModal<?php echo e($record['id']); ?>">
+                                        <i class="bi bi-upload me-1"></i>Upload Receipt
+                                    </button>
+                                </td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -293,6 +377,52 @@ $active_rentals = array_filter($rentals, function($rental) {
                 <?php endif; ?>
             </div>
         </div>
+
+        <?php foreach ($unpaid_records as $record): ?>
+        <div class="modal fade" id="paymentReceiptModal<?php echo e($record['id']); ?>" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog">
+                <form method="POST" action="customer_portal.php" enctype="multipart/form-data" class="modal-content">
+                    <input type="hidden" name="portal_action" value="upload_payment_receipt">
+                    <input type="hidden" name="token" value="<?php echo e($token); ?>">
+                    <input type="hidden" name="record_id" value="<?php echo e($record['id']); ?>">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Upload Payment Receipt</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <p class="text-muted mb-1">Amount Due</p>
+                            <h5><?php echo e(formatCurrency($record['amount_due'])); ?></h5>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Paid Date <span class="text-danger">*</span></label>
+                                <input type="date" name="paid_date" value="<?php echo e(date('Y-m-d')); ?>" class="form-control" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Amount Paid (RM) <span class="text-danger">*</span></label>
+                                <input type="number" name="amount_paid" value="<?php echo e($record['amount_due']); ?>" step="0.01" min="0.01" class="form-control" required>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Receipt <span class="text-danger">*</span></label>
+                            <input type="file" name="receipt_photo" accept="image/*,.pdf" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Notes</label>
+                            <textarea name="payment_notes" rows="3" class="form-control"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-dark">
+                            <i class="bi bi-upload me-2"></i>Submit Receipt
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <?php endforeach; ?>
 
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white">

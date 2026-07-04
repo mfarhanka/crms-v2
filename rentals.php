@@ -145,6 +145,32 @@ function uploadPaymentReceipt($field_name) {
     return $receipt_photo;
 }
 
+function customerPaymentStatusLabel($status) {
+    if ($status == 'approved') {
+        return 'Approved';
+    }
+    if ($status == 'rejected') {
+        return 'Rejected';
+    }
+    if ($status == 'pending') {
+        return 'Waiting Review';
+    }
+    return 'Not Submitted';
+}
+
+function customerPaymentStatusClass($status) {
+    if ($status == 'approved') {
+        return 'bg-success';
+    }
+    if ($status == 'rejected') {
+        return 'bg-danger';
+    }
+    if ($status == 'pending') {
+        return 'bg-warning text-dark';
+    }
+    return 'bg-secondary';
+}
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $rental_action = sanitize($_POST['rental_action'] ?? '');
 
@@ -350,6 +376,47 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $stmt->close();
         header('Location: rentals.php');
         exit();
+    } elseif ($rental_action == 'review_customer_payment') {
+        $record_id = intval($_POST['record_id'] ?? 0);
+        $rental_id = intval($_POST['rental_id'] ?? 0);
+        $review_status = sanitize($_POST['review_status'] ?? 'pending');
+        $admin_payment_notes = sanitize($_POST['admin_payment_notes'] ?? '');
+
+        $record_stmt = $conn->prepare("SELECT customer_receipt_photo, customer_paid_date, customer_amount_paid, amount_due
+                                       FROM rental_payment_records
+                                       WHERE id = ?
+                                         AND rental_id = ?
+                                         AND customer_payment_status = 'pending'");
+        $record_stmt->bind_param("ii", $record_id, $rental_id);
+        $record_stmt->execute();
+        $record = $record_stmt->get_result()->fetch_assoc();
+        $record_stmt->close();
+
+        if ($record && $review_status == 'approved') {
+            $paid_date = $record['customer_paid_date'] ?: date('Y-m-d');
+            $amount_paid = floatval($record['customer_amount_paid']) > 0 ? floatval($record['customer_amount_paid']) : floatval($record['amount_due']);
+            $receipt_photo = $record['customer_receipt_photo'];
+            $stmt = $conn->prepare("UPDATE rental_payment_records
+                                    SET status = 'paid',
+                                        paid_date = ?,
+                                        amount_paid = ?,
+                                        receipt_photo = ?,
+                                        customer_payment_status = 'approved',
+                                        admin_payment_notes = ?
+                                    WHERE id = ?");
+            $stmt->bind_param("sdssi", $paid_date, $amount_paid, $receipt_photo, $admin_payment_notes, $record_id);
+            $stmt->execute();
+            $stmt->close();
+            refreshRentalPaymentStatus($conn, $rental_id);
+        } elseif ($record && $review_status == 'rejected') {
+            $stmt = $conn->prepare("UPDATE rental_payment_records SET customer_payment_status = 'rejected', admin_payment_notes = ? WHERE id = ?");
+            $stmt->bind_param("si", $admin_payment_notes, $record_id);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        header('Location: rentals.php?view=' . $rental_id);
+        exit();
     } elseif ($rental_action == 'mark_paid' || $rental_action == 'mark_pending') {
         $record_id = intval($_POST['record_id'] ?? 0);
         $rental_id = intval($_POST['rental_id'] ?? 0);
@@ -364,11 +431,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $stmt = $conn->prepare("UPDATE rental_payment_records SET status = 'paid', paid_date = ?, amount_paid = ? WHERE id = ?");
             $stmt->bind_param("sdi", $paid_date, $amount_paid, $record_id);
         } else {
-            $record = $conn->query("SELECT receipt_photo FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
-            if (!empty($record['receipt_photo']) && file_exists('uploads/receipts/' . $record['receipt_photo'])) {
+            $record = $conn->query("SELECT receipt_photo, customer_receipt_photo FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
+            if (!empty($record['receipt_photo']) && $record['receipt_photo'] !== ($record['customer_receipt_photo'] ?? '') && file_exists('uploads/receipts/' . $record['receipt_photo'])) {
                 unlink('uploads/receipts/' . $record['receipt_photo']);
             }
-            $stmt = $conn->prepare("UPDATE rental_payment_records SET status = 'pending', paid_date = NULL, amount_paid = 0, receipt_photo = NULL WHERE id = ?");
+            $stmt = $conn->prepare("UPDATE rental_payment_records SET status = 'pending', paid_date = NULL, amount_paid = 0, receipt_photo = NULL, customer_payment_status = IF(customer_payment_status = 'approved', 'pending', customer_payment_status) WHERE id = ?");
             $stmt->bind_param("i", $record_id);
         }
 
@@ -631,6 +698,7 @@ include 'includes/header.php';
                                 <th>Amount Due</th>
                                 <th>Paid</th>
                                 <th>Receipt</th>
+                                <th>Customer Proof</th>
                                 <th>Status</th>
                                 <th>Action</th>
                             </tr>
@@ -651,8 +719,39 @@ include 'includes/header.php';
                                     <span class="text-muted">-</span>
                                     <?php endif; ?>
                                 </td>
+                                <td>
+                                    <span class="badge <?php echo customerPaymentStatusClass($record['customer_payment_status'] ?? 'none'); ?>">
+                                        <?php echo customerPaymentStatusLabel($record['customer_payment_status'] ?? 'none'); ?>
+                                    </span>
+                                    <?php if (!empty($record['customer_receipt_photo'])): ?>
+                                    <br>
+                                    <a href="<?php echo 'uploads/receipts/' . $record['customer_receipt_photo']; ?>" target="_blank" class="btn btn-sm btn-outline-info mt-1">
+                                        <i class="bi bi-receipt me-1"></i>Proof
+                                    </a>
+                                    <div class="small text-muted mt-1">
+                                        <?php echo formatCurrency($record['customer_amount_paid']); ?>
+                                        <?php if (!empty($record['customer_paid_date'])): ?>
+                                        on <?php echo formatDate($record['customer_paid_date']); ?>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php endif; ?>
+                                </td>
                                 <td><span class="badge <?php echo $record['status'] == 'paid' ? 'bg-success' : 'bg-danger'; ?>"><?php echo ucfirst($record['status']); ?></span></td>
                                 <td>
+                                    <?php if ($record['status'] == 'pending' && ($record['customer_payment_status'] ?? '') == 'pending'): ?>
+                                    <form method="POST" action="rentals.php" class="d-flex flex-wrap gap-2 mb-2">
+                                        <input type="hidden" name="rental_action" value="review_customer_payment">
+                                        <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
+                                        <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
+                                        <select name="review_status" class="form-select form-select-sm" style="max-width: 120px;">
+                                            <option value="approved">Approve</option>
+                                            <option value="rejected">Reject</option>
+                                        </select>
+                                        <input type="text" name="admin_payment_notes" class="form-control form-control-sm" placeholder="Notes" style="max-width: 160px;">
+                                        <button type="submit" class="btn btn-sm btn-dark">Save</button>
+                                    </form>
+                                    <?php endif; ?>
+
                                     <?php if ($record['status'] == 'paid'): ?>
                                     <div class="d-flex flex-wrap gap-2">
                                         <?php if (empty($record['receipt_photo'])): ?>
