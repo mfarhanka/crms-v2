@@ -105,14 +105,18 @@ function durationValueFromLabel($label) {
 }
 
 function refreshRentalPaymentStatus($conn, $rental_id) {
-    $summary = $conn->query("SELECT COALESCE(SUM(amount_due), 0) AS total_amount,
-                                    COALESCE(SUM(amount_paid), 0) AS total_paid
+    $summary = $conn->query("SELECT COALESCE(SUM(GREATEST(amount_due - waived_amount, 0)), 0) AS total_amount,
+                                    COALESCE(SUM(amount_paid), 0) AS total_paid,
+                                    COUNT(*) AS record_count
                              FROM rental_payment_records
                              WHERE rental_id = " . intval($rental_id))->fetch_assoc();
     $total_amount = floatval($summary['total_amount']);
     $total_paid = floatval($summary['total_paid']);
+    $record_count = intval($summary['record_count'] ?? 0);
     $payment_status = 'pending';
-    if ($total_paid >= $total_amount && $total_amount > 0) {
+    if ($record_count > 0 && $total_amount <= 0) {
+        $payment_status = 'paid';
+    } elseif ($total_paid >= $total_amount && $total_amount > 0) {
         $payment_status = 'paid';
     } elseif ($total_paid > 0) {
         $payment_status = 'partial';
@@ -169,6 +173,81 @@ function customerPaymentStatusClass($status) {
         return 'bg-warning text-dark';
     }
     return 'bg-secondary';
+}
+
+function waiverReasonLabel($reason) {
+    $labels = [
+        'sick' => 'Sick / Medical',
+        'hospital' => 'Admitted Hospital',
+        'vehicle_maintenance' => 'Vehicle Maintenance',
+        'accident_breakdown' => 'Accident / Breakdown',
+        'other' => 'Other',
+    ];
+    return $labels[$reason] ?? 'Other';
+}
+
+function waiverStatusClass($status) {
+    if ($status == 'approved') {
+        return 'bg-success';
+    }
+    if ($status == 'rejected') {
+        return 'bg-danger';
+    }
+    return 'bg-warning text-dark';
+}
+
+function dateOverlapDays($start_a, $end_a, $start_b, $end_b) {
+    $start = max(strtotime($start_a), strtotime($start_b));
+    $end = min(strtotime($end_a), strtotime($end_b));
+    if ($start > $end) {
+        return 0;
+    }
+    return intval(floor(($end - $start) / 86400)) + 1;
+}
+
+function applyWaiverToRentalPayments($conn, $waiver) {
+    $records_result = $conn->query("SELECT * FROM rental_payment_records
+                                    WHERE rental_id = " . intval($waiver['rental_id']) . "
+                                      AND period_end >= '" . $conn->real_escape_string($waiver['request_start_date']) . "'
+                                      AND period_start <= '" . $conn->real_escape_string($waiver['request_end_date']) . "'
+                                    ORDER BY period_start ASC");
+    $total_waived_amount = 0;
+    $total_waived_days = 0;
+
+    while ($record = $records_result->fetch_assoc()) {
+        $period_days = dateOverlapDays($record['period_start'], $record['period_end'], $record['period_start'], $record['period_end']);
+        $overlap_days = dateOverlapDays($record['period_start'], $record['period_end'], $waiver['request_start_date'], $waiver['request_end_date']);
+        if ($period_days <= 0 || $overlap_days <= 0) {
+            continue;
+        }
+
+        $daily_amount = floatval($record['amount_due']) / $period_days;
+        $waived_amount = min(floatval($record['amount_due']), round($daily_amount * $overlap_days, 2));
+        $new_waived_amount = min(floatval($record['amount_due']), floatval($record['waived_amount']) + $waived_amount);
+        $new_waived_days = intval($record['waived_days']) + $overlap_days;
+        $payable_amount = max(floatval($record['amount_due']) - $new_waived_amount, 0);
+        $new_status = floatval($record['amount_paid']) >= $payable_amount ? 'paid' : 'pending';
+        $paid_date = $new_status == 'paid' && empty($record['paid_date']) ? date('Y-m-d') : $record['paid_date'];
+
+        $record_id = intval($record['id']);
+        $stmt = $conn->prepare("UPDATE rental_payment_records SET waived_amount = ?, waived_days = ?, status = ?, paid_date = ? WHERE id = ?");
+        $stmt->bind_param("dissi", $new_waived_amount, $new_waived_days, $new_status, $paid_date, $record_id);
+        $stmt->execute();
+        $stmt->close();
+
+        $total_waived_amount += $waived_amount;
+        $total_waived_days += $overlap_days;
+    }
+
+    $waiver_id = intval($waiver['id']);
+    $stmt = $conn->prepare("UPDATE rental_waiver_requests
+                            SET approved_waived_amount = ?, approved_waived_days = ?
+                            WHERE id = ?");
+    $stmt->bind_param("dii", $total_waived_amount, $total_waived_days, $waiver_id);
+    $stmt->execute();
+    $stmt->close();
+
+    refreshRentalPaymentStatus($conn, intval($waiver['rental_id']));
 }
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -376,6 +455,33 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $stmt->close();
         header('Location: rentals.php');
         exit();
+    } elseif ($rental_action == 'review_waiver') {
+        $waiver_id = intval($_POST['waiver_id'] ?? 0);
+        $review_status = sanitize($_POST['review_status'] ?? 'pending');
+        $admin_notes = sanitize($_POST['admin_notes'] ?? '');
+
+        $waiver_stmt = $conn->prepare("SELECT * FROM rental_waiver_requests WHERE id = ? AND status = 'pending'");
+        $waiver_stmt->bind_param("i", $waiver_id);
+        $waiver_stmt->execute();
+        $waiver = $waiver_stmt->get_result()->fetch_assoc();
+        $waiver_stmt->close();
+
+        if ($waiver && in_array($review_status, ['approved', 'rejected'], true)) {
+            $reviewed_by = intval($_SESSION['user_id'] ?? 0);
+            $stmt = $conn->prepare("UPDATE rental_waiver_requests
+                                    SET status = ?, admin_notes = ?, reviewed_by = ?, reviewed_at = NOW()
+                                    WHERE id = ?");
+            $stmt->bind_param("ssii", $review_status, $admin_notes, $reviewed_by, $waiver_id);
+            $stmt->execute();
+            $stmt->close();
+
+            if ($review_status == 'approved') {
+                applyWaiverToRentalPayments($conn, $waiver);
+            }
+        }
+
+        header('Location: rentals.php?view=' . intval($waiver['rental_id'] ?? 0));
+        exit();
     } elseif ($rental_action == 'review_customer_payment') {
         $record_id = intval($_POST['record_id'] ?? 0);
         $rental_id = intval($_POST['rental_id'] ?? 0);
@@ -472,9 +578,14 @@ $cars_for_select_result = $conn->query("SELECT c.*, u.company_name, u.full_name
                                         JOIN users u ON c.user_id = u.id
                                         ORDER BY c.brand, c.model");
 $customers_for_select_result = $conn->query("SELECT c.*, u.company_name, u.full_name AS agent_name
-                                             FROM customers c
-                                             JOIN users u ON c.user_id = u.id
-                                             ORDER BY c.full_name");
+                                            FROM customers c
+                                            JOIN users u ON c.user_id = u.id
+                                            ORDER BY c.full_name");
+$rental_status_refresh = $conn->query("SELECT id FROM rentals");
+while ($refresh_rental = $rental_status_refresh->fetch_assoc()) {
+    refreshRentalPaymentStatus($conn, intval($refresh_rental['id']));
+}
+
 $rentals = $conn->query("SELECT r.*, c.brand, c.model, c.plate_number, cu.full_name AS customer_name, cu.phone AS customer_phone, u.company_name, u.full_name AS agent_name
                          FROM rentals r
                          JOIN cars c ON r.car_id = c.id
@@ -503,6 +614,19 @@ if (!empty($rental_rows)) {
     $records = $conn->query("SELECT * FROM rental_payment_records WHERE rental_id IN ($ids) ORDER BY due_date ASC, id ASC");
     while ($record = $records->fetch_assoc()) {
         $payment_records[intval($record['rental_id'])][] = $record;
+    }
+}
+
+$waiver_requests = [];
+if (!empty($rental_rows)) {
+    $ids = implode(',', array_map('intval', array_column($rental_rows, 'id')));
+    $waivers = $conn->query("SELECT wr.*, c.full_name AS customer_name
+                             FROM rental_waiver_requests wr
+                             JOIN customers c ON wr.customer_id = c.id
+                             WHERE wr.rental_id IN ($ids)
+                             ORDER BY wr.created_at DESC");
+    while ($waiver = $waivers->fetch_assoc()) {
+        $waiver_requests[intval($waiver['rental_id'])][] = $waiver;
     }
 }
 
@@ -708,7 +832,18 @@ include 'includes/header.php';
                             <tr>
                                 <td><?php echo formatDate($record['period_start']); ?> - <?php echo formatDate($record['period_end']); ?></td>
                                 <td><?php echo formatDate($record['due_date']); ?></td>
-                                <td><?php echo formatCurrency($record['amount_due']); ?></td>
+                                <td>
+                                    <?php echo formatCurrency($record['amount_due']); ?>
+                                    <?php if (floatval($record['waived_amount'] ?? 0) > 0): ?>
+                                    <br><small class="text-success">
+                                        Waived <?php echo formatCurrency($record['waived_amount']); ?>
+                                        <?php if (intval($record['waived_days'] ?? 0) > 0): ?>
+                                        (<?php echo intval($record['waived_days']); ?> days)
+                                        <?php endif; ?>
+                                    </small>
+                                    <br><small class="text-muted">Payable <?php echo formatCurrency(max(floatval($record['amount_due']) - floatval($record['waived_amount']), 0)); ?></small>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?php echo $record['status'] == 'paid' ? formatCurrency($record['amount_paid']) . '<br><small class="text-muted">' . formatDate($record['paid_date']) . '</small>' : '-'; ?></td>
                                 <td>
                                     <?php if (!empty($record['receipt_photo'])): ?>
@@ -785,6 +920,74 @@ include 'includes/header.php';
                             <?php endforeach; ?>
                         </tbody>
                     </table>
+                </div>
+
+                <?php $rental_waivers = $waiver_requests[intval($rental['id'])] ?? []; ?>
+                <div class="card bg-light border-0 mt-3">
+                    <div class="card-header bg-white">
+                        <h6 class="mb-0">Waiver / Appeal Requests</h6>
+                    </div>
+                    <div class="card-body">
+                        <?php if (count($rental_waivers) > 0): ?>
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>Date Range</th>
+                                        <th>Reason</th>
+                                        <th>Proof</th>
+                                        <th>Approved Waiver</th>
+                                        <th>Status</th>
+                                        <th>Review</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($rental_waivers as $waiver): ?>
+                                    <tr>
+                                        <td><?php echo formatDate($waiver['request_start_date']); ?> - <?php echo formatDate($waiver['request_end_date']); ?></td>
+                                        <td>
+                                            <?php echo waiverReasonLabel($waiver['reason']); ?><br>
+                                            <small class="text-muted"><?php echo htmlspecialchars($waiver['notes'] ?? '', ENT_QUOTES, 'UTF-8'); ?></small>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($waiver['proof_photo'])): ?>
+                                            <a href="<?php echo 'uploads/receipts/' . $waiver['proof_photo']; ?>" target="_blank" class="btn btn-sm btn-outline-info">
+                                                <i class="bi bi-file-earmark-text me-1"></i>Proof
+                                            </a>
+                                            <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php echo formatCurrency($waiver['approved_waived_amount']); ?><br>
+                                            <small class="text-muted"><?php echo intval($waiver['approved_waived_days']); ?> days</small>
+                                        </td>
+                                        <td><span class="badge <?php echo waiverStatusClass($waiver['status']); ?>"><?php echo ucfirst($waiver['status']); ?></span></td>
+                                        <td>
+                                            <?php if ($waiver['status'] == 'pending'): ?>
+                                            <form method="POST" action="rentals.php" class="d-flex flex-wrap gap-2">
+                                                <input type="hidden" name="rental_action" value="review_waiver">
+                                                <input type="hidden" name="waiver_id" value="<?php echo $waiver['id']; ?>">
+                                                <select name="review_status" class="form-select form-select-sm" style="max-width: 120px;">
+                                                    <option value="approved">Approve</option>
+                                                    <option value="rejected">Reject</option>
+                                                </select>
+                                                <input type="text" name="admin_notes" class="form-control form-control-sm" placeholder="Notes" style="max-width: 170px;">
+                                                <button type="submit" class="btn btn-sm btn-dark">Save</button>
+                                            </form>
+                                            <?php else: ?>
+                                            <small class="text-muted"><?php echo htmlspecialchars($waiver['admin_notes'] ?? '', ENT_QUOTES, 'UTF-8'); ?></small>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php else: ?>
+                        <p class="text-muted mb-0">No waiver requests for this rental.</p>
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">

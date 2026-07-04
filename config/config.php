@@ -198,6 +198,8 @@ function ensureRentalSchema($conn) {
             customer_payment_status ENUM('none', 'pending', 'approved', 'rejected') DEFAULT 'none',
             customer_payment_notes TEXT,
             admin_payment_notes TEXT,
+            waived_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+            waived_days INT NOT NULL DEFAULT 0,
             status ENUM('pending', 'paid') DEFAULT 'pending',
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -232,6 +234,37 @@ function ensureRentalSchema($conn) {
 
     if (!tableColumnExists($conn, 'rental_payment_records', 'admin_payment_notes')) {
         $conn->query("ALTER TABLE rental_payment_records ADD COLUMN admin_payment_notes TEXT AFTER customer_payment_notes");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'waived_amount')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN waived_amount DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER admin_payment_notes");
+    }
+
+    if (!tableColumnExists($conn, 'rental_payment_records', 'waived_days')) {
+        $conn->query("ALTER TABLE rental_payment_records ADD COLUMN waived_days INT NOT NULL DEFAULT 0 AFTER waived_amount");
+    }
+
+    if (!tableExists($conn, 'rental_waiver_requests')) {
+        $conn->query("CREATE TABLE rental_waiver_requests (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            customer_id INT NOT NULL,
+            rental_id INT NOT NULL,
+            request_start_date DATE NOT NULL,
+            request_end_date DATE NOT NULL,
+            reason ENUM('sick', 'hospital', 'vehicle_maintenance', 'accident_breakdown', 'other') NOT NULL DEFAULT 'other',
+            notes TEXT,
+            proof_photo VARCHAR(255),
+            status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+            approved_waived_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+            approved_waived_days INT NOT NULL DEFAULT 0,
+            admin_notes TEXT,
+            reviewed_by INT NULL,
+            reviewed_at DATETIME NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+            FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE
+        )");
     }
 }
 

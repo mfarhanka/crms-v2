@@ -88,6 +88,31 @@ function paymentProofStatusClass($status) {
     return 'bg-secondary';
 }
 
+function waiverReasonOptions() {
+    return [
+        'sick' => 'Sick / Medical',
+        'hospital' => 'Admitted Hospital',
+        'vehicle_maintenance' => 'Vehicle Maintenance',
+        'accident_breakdown' => 'Accident / Breakdown',
+        'other' => 'Other',
+    ];
+}
+
+function waiverReasonLabel($reason) {
+    $reasons = waiverReasonOptions();
+    return $reasons[$reason] ?? 'Other';
+}
+
+function waiverStatusClass($status) {
+    if ($status === 'approved') {
+        return 'bg-success';
+    }
+    if ($status === 'rejected') {
+        return 'bg-danger';
+    }
+    return 'bg-warning text-dark';
+}
+
 $token = portalInput($_GET['token'] ?? $_POST['token'] ?? '');
 $customer = null;
 $error = '';
@@ -129,7 +154,34 @@ $customer_id = intval($customer['id']);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $portal_action = portalInput($_POST['portal_action'] ?? '');
 
-    if ($portal_action === 'upload_payment_receipt') {
+    if ($portal_action === 'request_waiver') {
+        $rental_id = intval($_POST['rental_id'] ?? 0);
+        $request_start_date = portalInput($_POST['request_start_date'] ?? '');
+        $request_end_date = portalInput($_POST['request_end_date'] ?? '');
+        $reason = portalInput($_POST['reason'] ?? 'other');
+        $notes = portalInput($_POST['notes'] ?? '');
+        $allowed_reasons = array_keys(waiverReasonOptions());
+
+        $rental_stmt = $conn->prepare("SELECT id FROM rentals WHERE id = ? AND customer_id = ? AND status = 'active'");
+        $rental_stmt->bind_param("ii", $rental_id, $customer_id);
+        $rental_stmt->execute();
+        $rental = $rental_stmt->get_result()->fetch_assoc();
+        $rental_stmt->close();
+
+        if (!$rental || $request_start_date === '' || $request_end_date === '' || strtotime($request_end_date) < strtotime($request_start_date) || !in_array($reason, $allowed_reasons, true)) {
+            $error = 'Please complete the waiver request with a valid date range.';
+        } else {
+            $proof_photo = uploadClaimReceipt('proof_photo');
+            $stmt = $conn->prepare("INSERT INTO rental_waiver_requests (customer_id, rental_id, request_start_date, request_end_date, reason, notes, proof_photo) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("iisssss", $customer_id, $rental_id, $request_start_date, $request_end_date, $reason, $notes, $proof_photo);
+            if ($stmt->execute()) {
+                header('Location: customer_portal.php?token=' . urlencode($token) . '&waiver_submitted=1');
+                exit();
+            }
+            $error = 'Unable to submit waiver request. Please try again.';
+            $stmt->close();
+        }
+    } elseif ($portal_action === 'upload_payment_receipt') {
         $record_id = intval($_POST['record_id'] ?? 0);
         $paid_date = portalInput($_POST['paid_date'] ?? date('Y-m-d'));
         $amount_paid = floatval($_POST['amount_paid'] ?? 0);
@@ -217,6 +269,9 @@ if (isset($_GET['submitted'])) {
 if (isset($_GET['payment_submitted'])) {
     $success = 'Payment receipt uploaded. The office will review it.';
 }
+if (isset($_GET['waiver_submitted'])) {
+    $success = 'Waiver request submitted. The office will review it.';
+}
 
 $rentals = [];
 $rental_stmt = $conn->prepare("SELECT r.*, c.brand, c.model, c.plate_number
@@ -262,6 +317,21 @@ while ($claim = $claim_result->fetch_assoc()) {
 }
 $claim_stmt->close();
 
+$waiver_requests = [];
+$waiver_stmt = $conn->prepare("SELECT wr.*, c.brand, c.model, c.plate_number
+                               FROM rental_waiver_requests wr
+                               JOIN rentals r ON wr.rental_id = r.id
+                               JOIN cars c ON r.car_id = c.id
+                               WHERE wr.customer_id = ?
+                               ORDER BY wr.created_at DESC");
+$waiver_stmt->bind_param("i", $customer_id);
+$waiver_stmt->execute();
+$waiver_result = $waiver_stmt->get_result();
+while ($waiver = $waiver_result->fetch_assoc()) {
+    $waiver_requests[] = $waiver;
+}
+$waiver_stmt->close();
+
 $active_rentals = array_filter($rentals, function($rental) {
     return $rental['status'] === 'active';
 });
@@ -293,6 +363,9 @@ $active_rentals = array_filter($rentals, function($rental) {
                 <p class="text-muted mb-0">View unpaid rental records and submit maintenance claims.</p>
             </div>
             <div class="col-md-4 text-md-end">
+                <button type="button" class="btn btn-outline-dark me-2" data-bs-toggle="modal" data-bs-target="#waiverModal">
+                    <i class="bi bi-file-earmark-medical me-2"></i>Request Waiver
+                </button>
                 <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#claimModal">
                     <i class="bi bi-upload me-2"></i>Submit Claim
                 </button>
@@ -332,6 +405,14 @@ $active_rentals = array_filter($rentals, function($rental) {
                     </div>
                 </div>
             </div>
+            <div class="col-md-4">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <p class="text-muted mb-1">Waiver Requests</p>
+                        <h3 class="mb-0"><?php echo e(count($waiver_requests)); ?></h3>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="card border-0 shadow-sm mb-4">
@@ -365,6 +446,9 @@ $active_rentals = array_filter($rentals, function($rental) {
                                 <td>
                                     <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#paymentReceiptModal<?php echo e($record['id']); ?>">
                                         <i class="bi bi-upload me-1"></i>Upload Receipt
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#waiverModal">
+                                        <i class="bi bi-file-earmark-medical me-1"></i>Appeal
                                     </button>
                                 </td>
                             </tr>
@@ -424,6 +508,52 @@ $active_rentals = array_filter($rentals, function($rental) {
         </div>
         <?php endforeach; ?>
 
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Waiver / Appeal Requests</h5>
+            </div>
+            <div class="card-body">
+                <?php if (count($waiver_requests) > 0): ?>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Car</th>
+                                <th>Date Range</th>
+                                <th>Reason</th>
+                                <th>Approved Waiver</th>
+                                <th>Proof</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($waiver_requests as $waiver): ?>
+                            <tr>
+                                <td><strong><?php echo e($waiver['plate_number']); ?></strong><br><small class="text-muted"><?php echo e($waiver['brand'] . ' ' . $waiver['model']); ?></small></td>
+                                <td><?php echo e(formatDate($waiver['request_start_date'])); ?> - <?php echo e(formatDate($waiver['request_end_date'])); ?></td>
+                                <td><?php echo e(waiverReasonLabel($waiver['reason'])); ?></td>
+                                <td><?php echo e(formatCurrency($waiver['approved_waived_amount'])); ?><br><small class="text-muted"><?php echo e(intval($waiver['approved_waived_days'])); ?> days</small></td>
+                                <td>
+                                    <?php if (!empty($waiver['proof_photo'])): ?>
+                                    <a href="<?php echo e('uploads/receipts/' . $waiver['proof_photo']); ?>" target="_blank" class="btn btn-sm btn-info">
+                                        <i class="bi bi-file-earmark-text me-1"></i>Proof
+                                    </a>
+                                    <?php else: ?>
+                                    <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td><span class="badge <?php echo e(waiverStatusClass($waiver['status'])); ?>"><?php echo e(ucfirst($waiver['status'])); ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php else: ?>
+                <p class="text-muted text-center py-4 mb-0">No waiver requests submitted yet.</p>
+                <?php endif; ?>
+            </div>
+        </div>
+
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white">
                 <h5 class="mb-0">Maintenance Claims</h5>
@@ -472,6 +602,69 @@ $active_rentals = array_filter($rentals, function($rental) {
             </div>
         </div>
     </main>
+
+    <div class="modal fade" id="waiverModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <form method="POST" action="customer_portal.php" enctype="multipart/form-data" class="modal-content">
+                <input type="hidden" name="portal_action" value="request_waiver">
+                <input type="hidden" name="token" value="<?php echo e($token); ?>">
+                <div class="modal-header">
+                    <h5 class="modal-title">Request Payment Waiver</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <?php if (count($active_rentals) === 0): ?>
+                    <div class="alert alert-warning mb-0">No active rental is available for waiver request.</div>
+                    <?php else: ?>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Rental / Car <span class="text-danger">*</span></label>
+                            <select class="form-select" name="rental_id" required>
+                                <?php foreach ($active_rentals as $rental): ?>
+                                <option value="<?php echo e($rental['id']); ?>">
+                                    <?php echo e($rental['plate_number'] . ' - ' . $rental['brand'] . ' ' . $rental['model']); ?>
+                                </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Reason <span class="text-danger">*</span></label>
+                            <select class="form-select" name="reason" required>
+                                <?php foreach (waiverReasonOptions() as $reason_key => $reason_label): ?>
+                                <option value="<?php echo e($reason_key); ?>"><?php echo e($reason_label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Start Date <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" name="request_start_date" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">End Date <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" name="request_end_date" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Proof</label>
+                        <input type="file" class="form-control" name="proof_photo" accept="image/*,.pdf">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Reason Details</label>
+                        <textarea class="form-control" name="notes" rows="3"></textarea>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-dark" <?php echo count($active_rentals) === 0 ? 'disabled' : ''; ?>>
+                        <i class="bi bi-send me-2"></i>Submit Request
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <div class="modal fade" id="claimModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
