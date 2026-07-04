@@ -175,6 +175,10 @@ function customerPaymentStatusClass($status) {
     return 'bg-secondary';
 }
 
+function paymentRecordPayableAmount($record) {
+    return max(floatval($record['amount_due'] ?? 0) - floatval($record['waived_amount'] ?? 0), 0);
+}
+
 function waiverReasonLabel($reason) {
     $labels = [
         'sick' => 'Sick / Medical',
@@ -488,7 +492,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $review_status = sanitize($_POST['review_status'] ?? 'pending');
         $admin_payment_notes = sanitize($_POST['admin_payment_notes'] ?? '');
 
-        $record_stmt = $conn->prepare("SELECT customer_receipt_photo, customer_paid_date, customer_amount_paid, amount_due
+        $record_stmt = $conn->prepare("SELECT customer_receipt_photo, customer_paid_date, customer_amount_paid, amount_due, waived_amount
                                        FROM rental_payment_records
                                        WHERE id = ?
                                          AND rental_id = ?
@@ -500,7 +504,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         if ($record && $review_status == 'approved') {
             $paid_date = $record['customer_paid_date'] ?: date('Y-m-d');
-            $amount_paid = floatval($record['customer_amount_paid']) > 0 ? floatval($record['customer_amount_paid']) : floatval($record['amount_due']);
+            $amount_paid = floatval($record['customer_amount_paid']) > 0 ? floatval($record['customer_amount_paid']) : paymentRecordPayableAmount($record);
             $receipt_photo = $record['customer_receipt_photo'];
             $stmt = $conn->prepare("UPDATE rental_payment_records
                                     SET status = 'paid',
@@ -530,9 +534,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($rental_action == 'mark_paid') {
             $paid_date = sanitize($_POST['paid_date'] ?? date('Y-m-d'));
             $amount_paid = floatval($_POST['amount_paid'] ?? 0);
-            $record = $conn->query("SELECT amount_due FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
+            $record = $conn->query("SELECT amount_due, waived_amount FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
             if ($amount_paid <= 0 && $record) {
-                $amount_paid = floatval($record['amount_due']);
+                $amount_paid = paymentRecordPayableAmount($record);
             }
             $stmt = $conn->prepare("UPDATE rental_payment_records SET status = 'paid', paid_date = ?, amount_paid = ? WHERE id = ?");
             $stmt->bind_param("sdi", $paid_date, $amount_paid, $record_id);
@@ -829,6 +833,7 @@ include 'includes/header.php';
                         </thead>
                         <tbody>
                             <?php foreach ($records as $record): ?>
+                            <?php $payable_amount = paymentRecordPayableAmount($record); ?>
                             <tr>
                                 <td><?php echo formatDate($record['period_start']); ?> - <?php echo formatDate($record['period_end']); ?></td>
                                 <td><?php echo formatDate($record['due_date']); ?></td>
@@ -841,7 +846,7 @@ include 'includes/header.php';
                                         (<?php echo intval($record['waived_days']); ?> days)
                                         <?php endif; ?>
                                     </small>
-                                    <br><small class="text-muted">Payable <?php echo formatCurrency(max(floatval($record['amount_due']) - floatval($record['waived_amount']), 0)); ?></small>
+                                    <br><small class="text-muted">Payable <?php echo formatCurrency($payable_amount); ?></small>
                                     <?php endif; ?>
                                 </td>
                                 <td><?php echo $record['status'] == 'paid' ? formatCurrency($record['amount_paid']) . '<br><small class="text-muted">' . formatDate($record['paid_date']) . '</small>' : '-'; ?></td>
@@ -911,7 +916,7 @@ include 'includes/header.php';
                                         <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
                                         <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
                                         <input type="date" name="paid_date" value="<?php echo date('Y-m-d'); ?>" class="form-control form-control-sm" style="max-width: 150px;">
-                                        <input type="number" name="amount_paid" value="<?php echo $record['amount_due']; ?>" step="0.01" min="0" class="form-control form-control-sm" style="max-width: 120px;">
+                                        <input type="number" name="amount_paid" value="<?php echo $payable_amount; ?>" step="0.01" min="0" class="form-control form-control-sm" style="max-width: 120px;">
                                         <button type="submit" class="btn btn-sm btn-success">Mark Paid</button>
                                     </form>
                                     <?php endif; ?>

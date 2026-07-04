@@ -88,6 +88,10 @@ function paymentProofStatusClass($status) {
     return 'bg-secondary';
 }
 
+function paymentRecordPayableAmount($record) {
+    return max(floatval($record['amount_due'] ?? 0) - floatval($record['waived_amount'] ?? 0), 0);
+}
+
 function waiverReasonOptions() {
     return [
         'sick' => 'Sick / Medical',
@@ -187,7 +191,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $amount_paid = floatval($_POST['amount_paid'] ?? 0);
         $payment_notes = portalInput($_POST['payment_notes'] ?? '');
 
-        $record_stmt = $conn->prepare("SELECT pr.id, pr.amount_due
+        $record_stmt = $conn->prepare("SELECT pr.id, pr.amount_due, pr.waived_amount
                                        FROM rental_payment_records pr
                                        JOIN rentals r ON pr.rental_id = r.id
                                        WHERE pr.id = ?
@@ -202,7 +206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = 'Selected unpaid record was not found.';
         } else {
             if ($amount_paid <= 0) {
-                $amount_paid = floatval($payment_record['amount_due']);
+                $amount_paid = paymentRecordPayableAmount($payment_record);
             }
 
             $receipt_photo = uploadClaimReceipt('receipt_photo');
@@ -436,11 +440,18 @@ $active_rentals = array_filter($rentals, function($rental) {
                         </thead>
                         <tbody>
                             <?php foreach ($unpaid_records as $record): ?>
+                            <?php $payable_amount = paymentRecordPayableAmount($record); ?>
                             <tr>
                                 <td><strong><?php echo e($record['plate_number']); ?></strong><br><small class="text-muted"><?php echo e($record['brand'] . ' ' . $record['model']); ?></small></td>
                                 <td><?php echo e(formatDate($record['period_start'])); ?> - <?php echo e(formatDate($record['period_end'])); ?></td>
                                 <td><?php echo e(formatDate($record['due_date'])); ?></td>
-                                <td><strong><?php echo e(formatCurrency($record['amount_due'])); ?></strong></td>
+                                <td>
+                                    <strong><?php echo e(formatCurrency($payable_amount)); ?></strong>
+                                    <?php if (floatval($record['waived_amount'] ?? 0) > 0): ?>
+                                    <br><small class="text-muted">Original <?php echo e(formatCurrency($record['amount_due'])); ?></small>
+                                    <br><small class="text-success">Waived <?php echo e(formatCurrency($record['waived_amount'])); ?></small>
+                                    <?php endif; ?>
+                                </td>
                                 <td><span class="badge <?php echo e(paymentProofStatusClass($record['customer_payment_status'] ?? 'none')); ?>"><?php echo e(paymentProofStatusLabel($record['customer_payment_status'] ?? 'none')); ?></span></td>
                                 <td><span class="badge bg-danger">Pending</span></td>
                                 <td>
@@ -463,6 +474,7 @@ $active_rentals = array_filter($rentals, function($rental) {
         </div>
 
         <?php foreach ($unpaid_records as $record): ?>
+        <?php $payable_amount = paymentRecordPayableAmount($record); ?>
         <div class="modal fade" id="paymentReceiptModal<?php echo e($record['id']); ?>" tabindex="-1" aria-hidden="true">
             <div class="modal-dialog">
                 <form method="POST" action="customer_portal.php" enctype="multipart/form-data" class="modal-content">
@@ -475,8 +487,11 @@ $active_rentals = array_filter($rentals, function($rental) {
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <p class="text-muted mb-1">Amount Due</p>
-                            <h5><?php echo e(formatCurrency($record['amount_due'])); ?></h5>
+                            <p class="text-muted mb-1">Payable Amount</p>
+                            <h5><?php echo e(formatCurrency($payable_amount)); ?></h5>
+                            <?php if (floatval($record['waived_amount'] ?? 0) > 0): ?>
+                            <div class="small text-muted">Original <?php echo e(formatCurrency($record['amount_due'])); ?>, waived <?php echo e(formatCurrency($record['waived_amount'])); ?></div>
+                            <?php endif; ?>
                         </div>
                         <div class="row">
                             <div class="col-md-6 mb-3">
@@ -485,7 +500,7 @@ $active_rentals = array_filter($rentals, function($rental) {
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Amount Paid (RM) <span class="text-danger">*</span></label>
-                                <input type="number" name="amount_paid" value="<?php echo e($record['amount_due']); ?>" step="0.01" min="0.01" class="form-control" required>
+                                <input type="number" name="amount_paid" value="<?php echo e($payable_amount); ?>" step="0.01" min="0.01" class="form-control" required>
                             </div>
                         </div>
                         <div class="mb-3">
