@@ -114,6 +114,26 @@ CREATE TABLE IF NOT EXISTS rental_payment_records (
     FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE
 );
 
+-- Individual split payment submissions for each scheduled rental payment record
+CREATE TABLE IF NOT EXISTS rental_payment_submissions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    rental_id INT NOT NULL,
+    payment_record_id INT NOT NULL,
+    paid_date DATE NOT NULL,
+    amount_paid DECIMAL(10,2) NOT NULL DEFAULT 0,
+    receipt_photo VARCHAR(255),
+    source ENUM('customer', 'admin') NOT NULL DEFAULT 'customer',
+    status ENUM('pending', 'approved', 'rejected', 'void') NOT NULL DEFAULT 'pending',
+    notes TEXT,
+    admin_notes TEXT,
+    reviewed_by INT NULL,
+    reviewed_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE,
+    FOREIGN KEY (payment_record_id) REFERENCES rental_payment_records(id) ON DELETE CASCADE
+);
+
 -- Customer rental payment waiver requests
 CREATE TABLE IF NOT EXISTS rental_waiver_requests (
     id INT PRIMARY KEY AUTO_INCREMENT,

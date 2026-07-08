@@ -105,6 +105,10 @@ function durationValueFromLabel($label) {
 }
 
 function refreshRentalPaymentStatus($conn, $rental_id) {
+    $conn->query("UPDATE rental_payment_records
+                  SET status = IF(amount_paid >= GREATEST(amount_due - waived_amount, 0), 'paid', 'pending')
+                  WHERE rental_id = " . intval($rental_id));
+
     $summary = $conn->query("SELECT COALESCE(SUM(GREATEST(amount_due - waived_amount, 0)), 0) AS total_amount,
                                     COALESCE(SUM(amount_paid), 0) AS total_paid,
                                     COUNT(*) AS record_count
@@ -175,8 +179,46 @@ function customerPaymentStatusClass($status) {
     return 'bg-secondary';
 }
 
+function paymentSubmissionStatusClass($status) {
+    if ($status == 'approved') {
+        return 'bg-success';
+    }
+    if ($status == 'rejected' || $status == 'void') {
+        return 'bg-danger';
+    }
+    return 'bg-warning text-dark';
+}
+
 function paymentRecordPayableAmount($record) {
     return max(floatval($record['amount_due'] ?? 0) - floatval($record['waived_amount'] ?? 0), 0);
+}
+
+function paymentRecordBalanceAmount($record) {
+    return max(paymentRecordPayableAmount($record) - floatval($record['amount_paid'] ?? 0), 0);
+}
+
+function recordRentalPaymentSubmission($conn, $rental_id, $record_id, $paid_date, $amount_paid, $receipt_photo, $source, $status, $notes = '', $admin_notes = '') {
+    $reviewed_by = $status === 'pending' ? null : intval($_SESSION['user_id'] ?? 0);
+    $reviewed_at = $status === 'pending' ? null : date('Y-m-d H:i:s');
+    $stmt = $conn->prepare("INSERT INTO rental_payment_submissions
+                            (rental_id, payment_record_id, paid_date, amount_paid, receipt_photo, source, status, notes, admin_notes, reviewed_by, reviewed_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->bind_param("iisdsssssis", $rental_id, $record_id, $paid_date, $amount_paid, $receipt_photo, $source, $status, $notes, $admin_notes, $reviewed_by, $reviewed_at);
+    $stmt->execute();
+    $stmt->close();
+}
+
+function updateLatestPaymentSubmissionStatus($conn, $record_id, $status, $admin_notes = '') {
+    $reviewed_by = intval($_SESSION['user_id'] ?? 0);
+    $stmt = $conn->prepare("UPDATE rental_payment_submissions
+                            SET status = ?, admin_notes = ?, reviewed_by = ?, reviewed_at = NOW()
+                            WHERE payment_record_id = ?
+                              AND status = 'pending'
+                            ORDER BY id DESC
+                            LIMIT 1");
+    $stmt->bind_param("ssii", $status, $admin_notes, $reviewed_by, $record_id);
+    $stmt->execute();
+    $stmt->close();
 }
 
 function waiverReasonLabel($reason) {
@@ -317,7 +359,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $update_stmt->execute();
                             $update_stmt->close();
                             $conn->query("UPDATE cars SET status = 'rented' WHERE id = " . intval($car_id));
-                            header('Location: rentals.php?view=' . $rental_id);
+                            header('Location: rental_view.php?id=' . $rental_id);
                             exit();
                         }
 
@@ -434,7 +476,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 $conn->query("UPDATE cars SET status = 'available' WHERE id = " . intval($car_id));
                             }
 
-                            header('Location: rentals.php?view=' . $rental_id);
+                            header('Location: rental_view.php?id=' . $rental_id);
                             exit();
                         }
 
@@ -484,7 +526,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
 
-        header('Location: rentals.php?view=' . intval($waiver['rental_id'] ?? 0));
+        header('Location: rental_view.php?id=' . intval($waiver['rental_id'] ?? 0));
         exit();
     } elseif ($rental_action == 'review_customer_payment') {
         $record_id = intval($_POST['record_id'] ?? 0);
@@ -492,7 +534,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $review_status = sanitize($_POST['review_status'] ?? 'pending');
         $admin_payment_notes = sanitize($_POST['admin_payment_notes'] ?? '');
 
-        $record_stmt = $conn->prepare("SELECT customer_receipt_photo, customer_paid_date, customer_amount_paid, amount_due, waived_amount
+        $record_stmt = $conn->prepare("SELECT customer_receipt_photo, customer_paid_date, customer_amount_paid, amount_due, amount_paid, waived_amount
                                        FROM rental_payment_records
                                        WHERE id = ?
                                          AND rental_id = ?
@@ -504,28 +546,34 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         if ($record && $review_status == 'approved') {
             $paid_date = $record['customer_paid_date'] ?: date('Y-m-d');
-            $amount_paid = floatval($record['customer_amount_paid']) > 0 ? floatval($record['customer_amount_paid']) : paymentRecordPayableAmount($record);
+            $balance_amount = paymentRecordBalanceAmount($record);
+            $payment_amount = floatval($record['customer_amount_paid']) > 0 ? floatval($record['customer_amount_paid']) : $balance_amount;
+            $payment_amount = min($payment_amount, $balance_amount);
+            $amount_paid = floatval($record['amount_paid']) + $payment_amount;
+            $new_status = $amount_paid >= paymentRecordPayableAmount($record) ? 'paid' : 'pending';
             $receipt_photo = $record['customer_receipt_photo'];
             $stmt = $conn->prepare("UPDATE rental_payment_records
-                                    SET status = 'paid',
+                                    SET status = ?,
                                         paid_date = ?,
                                         amount_paid = ?,
                                         receipt_photo = ?,
                                         customer_payment_status = 'approved',
                                         admin_payment_notes = ?
                                     WHERE id = ?");
-            $stmt->bind_param("sdssi", $paid_date, $amount_paid, $receipt_photo, $admin_payment_notes, $record_id);
+            $stmt->bind_param("ssdssi", $new_status, $paid_date, $amount_paid, $receipt_photo, $admin_payment_notes, $record_id);
             $stmt->execute();
             $stmt->close();
+            updateLatestPaymentSubmissionStatus($conn, $record_id, 'approved', $admin_payment_notes);
             refreshRentalPaymentStatus($conn, $rental_id);
         } elseif ($record && $review_status == 'rejected') {
             $stmt = $conn->prepare("UPDATE rental_payment_records SET customer_payment_status = 'rejected', admin_payment_notes = ? WHERE id = ?");
             $stmt->bind_param("si", $admin_payment_notes, $record_id);
             $stmt->execute();
             $stmt->close();
+            updateLatestPaymentSubmissionStatus($conn, $record_id, 'rejected', $admin_payment_notes);
         }
 
-        header('Location: rentals.php?view=' . $rental_id);
+        header('Location: rental_view.php?id=' . $rental_id);
         exit();
     } elseif ($rental_action == 'mark_paid' || $rental_action == 'mark_pending') {
         $record_id = intval($_POST['record_id'] ?? 0);
@@ -534,12 +582,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($rental_action == 'mark_paid') {
             $paid_date = sanitize($_POST['paid_date'] ?? date('Y-m-d'));
             $amount_paid = floatval($_POST['amount_paid'] ?? 0);
-            $record = $conn->query("SELECT amount_due, waived_amount FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
-            if ($amount_paid <= 0 && $record) {
-                $amount_paid = paymentRecordPayableAmount($record);
+            $record = $conn->query("SELECT amount_due, amount_paid, waived_amount FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
+            if (!$record) {
+                header('Location: rental_view.php?id=' . $rental_id);
+                exit();
             }
-            $stmt = $conn->prepare("UPDATE rental_payment_records SET status = 'paid', paid_date = ?, amount_paid = ? WHERE id = ?");
-            $stmt->bind_param("sdi", $paid_date, $amount_paid, $record_id);
+            if ($amount_paid <= 0) {
+                $amount_paid = paymentRecordBalanceAmount($record);
+            }
+            $amount_paid = min($amount_paid, paymentRecordBalanceAmount($record));
+            $new_total_paid = floatval($record['amount_paid'] ?? 0) + $amount_paid;
+            $new_status = $new_total_paid >= paymentRecordPayableAmount($record) ? 'paid' : 'pending';
+            $stmt = $conn->prepare("UPDATE rental_payment_records SET status = ?, paid_date = ?, amount_paid = ? WHERE id = ?");
+            $stmt->bind_param("ssdi", $new_status, $paid_date, $new_total_paid, $record_id);
         } else {
             $record = $conn->query("SELECT receipt_photo, customer_receipt_photo FROM rental_payment_records WHERE id = $record_id")->fetch_assoc();
             if (!empty($record['receipt_photo']) && $record['receipt_photo'] !== ($record['customer_receipt_photo'] ?? '') && file_exists('uploads/receipts/' . $record['receipt_photo'])) {
@@ -551,8 +606,68 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         $stmt->execute();
         $stmt->close();
+        if ($rental_action == 'mark_paid' && $amount_paid > 0) {
+            recordRentalPaymentSubmission($conn, $rental_id, $record_id, $paid_date, $amount_paid, '', 'admin', 'approved');
+        } elseif ($rental_action == 'mark_pending') {
+            $void_stmt = $conn->prepare("UPDATE rental_payment_submissions SET status = 'void', admin_notes = 'Payment reset by admin' WHERE payment_record_id = ? AND status = 'approved'");
+            $void_stmt->bind_param("i", $record_id);
+            $void_stmt->execute();
+            $void_stmt->close();
+        }
         refreshRentalPaymentStatus($conn, $rental_id);
-        header('Location: rentals.php?view=' . $rental_id);
+        header('Location: rental_view.php?id=' . $rental_id);
+        exit();
+    } elseif ($rental_action == 'remove_rejected_customer_payment') {
+        $record_id = intval($_POST['record_id'] ?? 0);
+        $rental_id = intval($_POST['rental_id'] ?? 0);
+
+        $record_stmt = $conn->prepare("SELECT id
+                                       FROM rental_payment_records
+                                       WHERE id = ?
+                                         AND rental_id = ?
+                                         AND customer_payment_status = 'rejected'");
+        $record_stmt->bind_param("ii", $record_id, $rental_id);
+        $record_stmt->execute();
+        $record = $record_stmt->get_result()->fetch_assoc();
+        $record_stmt->close();
+
+        if ($record) {
+            $stmt = $conn->prepare("UPDATE rental_payment_records
+                                    SET customer_receipt_photo = NULL,
+                                        customer_paid_date = NULL,
+                                        customer_amount_paid = 0,
+                                        customer_payment_status = 'none',
+                                        customer_payment_notes = NULL,
+                                        admin_payment_notes = NULL
+                                    WHERE id = ?");
+            $stmt->bind_param("i", $record_id);
+            $stmt->execute();
+            $stmt->close();
+
+            $delete_stmt = $conn->prepare("DELETE FROM rental_payment_submissions
+                                           WHERE payment_record_id = ?
+                                             AND rental_id = ?
+                                             AND status = 'rejected'");
+            $delete_stmt->bind_param("ii", $record_id, $rental_id);
+            $delete_stmt->execute();
+            $delete_stmt->close();
+        }
+
+        header('Location: rental_view.php?id=' . $rental_id);
+        exit();
+    } elseif ($rental_action == 'remove_payment_submission') {
+        $submission_id = intval($_POST['submission_id'] ?? 0);
+        $rental_id = intval($_POST['rental_id'] ?? 0);
+
+        $stmt = $conn->prepare("DELETE FROM rental_payment_submissions
+                                WHERE id = ?
+                                  AND rental_id = ?
+                                  AND status IN ('void', 'rejected')");
+        $stmt->bind_param("ii", $submission_id, $rental_id);
+        $stmt->execute();
+        $stmt->close();
+
+        header('Location: rental_view.php?id=' . $rental_id);
         exit();
     } elseif ($rental_action == 'upload_receipt') {
         $record_id = intval($_POST['record_id'] ?? 0);
@@ -572,7 +687,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
 
-        header('Location: rentals.php?view=' . $rental_id);
+        header('Location: rental_view.php?id=' . $rental_id);
         exit();
     }
 }
@@ -613,11 +728,22 @@ while ($customer = $customers_for_select_result->fetch_assoc()) {
 }
 
 $payment_records = [];
+$payment_record_ids = [];
 if (!empty($rental_rows)) {
     $ids = implode(',', array_map('intval', array_column($rental_rows, 'id')));
     $records = $conn->query("SELECT * FROM rental_payment_records WHERE rental_id IN ($ids) ORDER BY due_date ASC, id ASC");
     while ($record = $records->fetch_assoc()) {
         $payment_records[intval($record['rental_id'])][] = $record;
+        $payment_record_ids[] = intval($record['id']);
+    }
+}
+
+$payment_submissions = [];
+if (!empty($payment_record_ids)) {
+    $record_ids = implode(',', array_map('intval', $payment_record_ids));
+    $submissions = $conn->query("SELECT * FROM rental_payment_submissions WHERE payment_record_id IN ($record_ids) ORDER BY paid_date ASC, id ASC");
+    while ($submission = $submissions->fetch_assoc()) {
+        $payment_submissions[intval($submission['payment_record_id'])][] = $submission;
     }
 }
 
@@ -683,7 +809,7 @@ include 'includes/header.php';
                         <td><?php echo formatCurrency($rental['total_paid']); ?><br><small class="text-muted"><?php echo ucfirst($rental['payment_status']); ?></small></td>
                         <td><span class="badge <?php echo $rental['status'] == 'active' ? 'bg-primary' : ($rental['status'] == 'completed' ? 'bg-success' : 'bg-danger'); ?>"><?php echo ucfirst($rental['status']); ?></span></td>
                         <td>
-                            <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#viewRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-eye"></i></button>
+                            <a href="rental_view.php?id=<?php echo $rental['id']; ?>" class="btn btn-sm btn-info"><i class="bi bi-eye"></i></a>
                             <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#editRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-pencil"></i></button>
                             <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteRentalModal<?php echo $rental['id']; ?>"><i class="bi bi-trash"></i></button>
                         </td>
@@ -802,206 +928,6 @@ include 'includes/header.php';
 
 <?php foreach ($rental_rows as $rental): ?>
 <?php $records = $payment_records[intval($rental['id'])] ?? []; ?>
-<div class="modal fade" id="viewRentalModal<?php echo $rental['id']; ?>" tabindex="-1" aria-labelledby="viewRentalModalLabel<?php echo $rental['id']; ?>" aria-hidden="true">
-    <div class="modal-dialog modal-xl modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header bg-dark text-white">
-                <h5 class="modal-title" id="viewRentalModalLabel<?php echo $rental['id']; ?>">Rental #<?php echo str_pad($rental['id'], 6, '0', STR_PAD_LEFT); ?></h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-3 mb-3">
-                    <div class="col-md-3"><p class="text-muted mb-1">Car</p><h6><?php echo $rental['brand'] . ' ' . $rental['model']; ?></h6></div>
-                    <div class="col-md-3"><p class="text-muted mb-1">Customer</p><h6><?php echo $rental['customer_name']; ?></h6></div>
-                    <div class="col-md-3"><p class="text-muted mb-1">Agreement</p><h6><?php echo formatDate($rental['start_date']); ?> - <?php echo formatDate($rental['end_date']); ?></h6></div>
-                    <div class="col-md-3"><p class="text-muted mb-1">Schedule</p><h6><?php echo paymentFrequencyLabel($rental['payment_frequency']); ?> at <?php echo formatCurrency($rental['rate_amount']); ?></h6></div>
-                </div>
-
-                <div class="table-responsive">
-                    <table class="table table-sm table-hover">
-                        <thead>
-                            <tr>
-                                <th>Period</th>
-                                <th>Due Date</th>
-                                <th>Amount Due</th>
-                                <th>Paid</th>
-                                <th>Receipt</th>
-                                <th>Customer Proof</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($records as $record): ?>
-                            <?php $payable_amount = paymentRecordPayableAmount($record); ?>
-                            <tr>
-                                <td><?php echo formatDate($record['period_start']); ?> - <?php echo formatDate($record['period_end']); ?></td>
-                                <td><?php echo formatDate($record['due_date']); ?></td>
-                                <td>
-                                    <?php echo formatCurrency($record['amount_due']); ?>
-                                    <?php if (floatval($record['waived_amount'] ?? 0) > 0): ?>
-                                    <br><small class="text-success">
-                                        Waived <?php echo formatCurrency($record['waived_amount']); ?>
-                                        <?php if (intval($record['waived_days'] ?? 0) > 0): ?>
-                                        (<?php echo intval($record['waived_days']); ?> days)
-                                        <?php endif; ?>
-                                    </small>
-                                    <br><small class="text-muted">Payable <?php echo formatCurrency($payable_amount); ?></small>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?php echo $record['status'] == 'paid' ? formatCurrency($record['amount_paid']) . '<br><small class="text-muted">' . formatDate($record['paid_date']) . '</small>' : '-'; ?></td>
-                                <td>
-                                    <?php if (!empty($record['receipt_photo'])): ?>
-                                    <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#receiptModal<?php echo $record['id']; ?>">
-                                        <i class="bi bi-receipt me-1"></i>Receipt
-                                    </button>
-                                    <?php else: ?>
-                                    <span class="text-muted">-</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="badge <?php echo customerPaymentStatusClass($record['customer_payment_status'] ?? 'none'); ?>">
-                                        <?php echo customerPaymentStatusLabel($record['customer_payment_status'] ?? 'none'); ?>
-                                    </span>
-                                    <?php if (!empty($record['customer_receipt_photo'])): ?>
-                                    <br>
-                                    <a href="<?php echo 'uploads/receipts/' . $record['customer_receipt_photo']; ?>" target="_blank" class="btn btn-sm btn-outline-info mt-1">
-                                        <i class="bi bi-receipt me-1"></i>Proof
-                                    </a>
-                                    <div class="small text-muted mt-1">
-                                        <?php echo formatCurrency($record['customer_amount_paid']); ?>
-                                        <?php if (!empty($record['customer_paid_date'])): ?>
-                                        on <?php echo formatDate($record['customer_paid_date']); ?>
-                                        <?php endif; ?>
-                                    </div>
-                                    <?php endif; ?>
-                                </td>
-                                <td><span class="badge <?php echo $record['status'] == 'paid' ? 'bg-success' : 'bg-danger'; ?>"><?php echo ucfirst($record['status']); ?></span></td>
-                                <td>
-                                    <?php if ($record['status'] == 'pending' && ($record['customer_payment_status'] ?? '') == 'pending'): ?>
-                                    <form method="POST" action="rentals.php" class="d-flex flex-wrap gap-2 mb-2">
-                                        <input type="hidden" name="rental_action" value="review_customer_payment">
-                                        <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
-                                        <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
-                                        <select name="review_status" class="form-select form-select-sm" style="max-width: 120px;">
-                                            <option value="approved">Approve</option>
-                                            <option value="rejected">Reject</option>
-                                        </select>
-                                        <input type="text" name="admin_payment_notes" class="form-control form-control-sm" placeholder="Notes" style="max-width: 160px;">
-                                        <button type="submit" class="btn btn-sm btn-dark">Save</button>
-                                    </form>
-                                    <?php endif; ?>
-
-                                    <?php if ($record['status'] == 'paid'): ?>
-                                    <div class="d-flex flex-wrap gap-2">
-                                        <?php if (empty($record['receipt_photo'])): ?>
-                                        <form method="POST" action="rentals.php" enctype="multipart/form-data" class="d-flex flex-wrap gap-2">
-                                            <input type="hidden" name="rental_action" value="upload_receipt">
-                                            <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
-                                            <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
-                                            <input type="file" name="receipt_photo" accept="image/*,.pdf" class="form-control form-control-sm" style="max-width: 220px;" required>
-                                            <button type="submit" class="btn btn-sm btn-info">Upload Receipt</button>
-                                        </form>
-                                        <?php endif; ?>
-                                        <form method="POST" action="rentals.php" class="d-inline">
-                                            <input type="hidden" name="rental_action" value="mark_pending">
-                                            <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
-                                            <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-warning">Mark Pending</button>
-                                        </form>
-                                    </div>
-                                    <?php else: ?>
-                                    <form method="POST" action="rentals.php" class="d-flex flex-wrap gap-2">
-                                        <input type="hidden" name="rental_action" value="mark_paid">
-                                        <input type="hidden" name="rental_id" value="<?php echo $rental['id']; ?>">
-                                        <input type="hidden" name="record_id" value="<?php echo $record['id']; ?>">
-                                        <input type="date" name="paid_date" value="<?php echo date('Y-m-d'); ?>" class="form-control form-control-sm" style="max-width: 150px;">
-                                        <input type="number" name="amount_paid" value="<?php echo $payable_amount; ?>" step="0.01" min="0" class="form-control form-control-sm" style="max-width: 120px;">
-                                        <button type="submit" class="btn btn-sm btn-success">Mark Paid</button>
-                                    </form>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-
-                <?php $rental_waivers = $waiver_requests[intval($rental['id'])] ?? []; ?>
-                <div class="card bg-light border-0 mt-3">
-                    <div class="card-header bg-white">
-                        <h6 class="mb-0">Waiver / Appeal Requests</h6>
-                    </div>
-                    <div class="card-body">
-                        <?php if (count($rental_waivers) > 0): ?>
-                        <div class="table-responsive">
-                            <table class="table table-sm align-middle">
-                                <thead>
-                                    <tr>
-                                        <th>Date Range</th>
-                                        <th>Reason</th>
-                                        <th>Proof</th>
-                                        <th>Approved Waiver</th>
-                                        <th>Status</th>
-                                        <th>Review</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($rental_waivers as $waiver): ?>
-                                    <tr>
-                                        <td><?php echo formatDate($waiver['request_start_date']); ?> - <?php echo formatDate($waiver['request_end_date']); ?></td>
-                                        <td>
-                                            <?php echo waiverReasonLabel($waiver['reason']); ?><br>
-                                            <small class="text-muted"><?php echo htmlspecialchars($waiver['notes'] ?? '', ENT_QUOTES, 'UTF-8'); ?></small>
-                                        </td>
-                                        <td>
-                                            <?php if (!empty($waiver['proof_photo'])): ?>
-                                            <a href="<?php echo 'uploads/receipts/' . $waiver['proof_photo']; ?>" target="_blank" class="btn btn-sm btn-outline-info">
-                                                <i class="bi bi-file-earmark-text me-1"></i>Proof
-                                            </a>
-                                            <?php else: ?>
-                                            <span class="text-muted">-</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td>
-                                            <?php echo formatCurrency($waiver['approved_waived_amount']); ?><br>
-                                            <small class="text-muted"><?php echo intval($waiver['approved_waived_days']); ?> days</small>
-                                        </td>
-                                        <td><span class="badge <?php echo waiverStatusClass($waiver['status']); ?>"><?php echo ucfirst($waiver['status']); ?></span></td>
-                                        <td>
-                                            <?php if ($waiver['status'] == 'pending'): ?>
-                                            <form method="POST" action="rentals.php" class="d-flex flex-wrap gap-2">
-                                                <input type="hidden" name="rental_action" value="review_waiver">
-                                                <input type="hidden" name="waiver_id" value="<?php echo $waiver['id']; ?>">
-                                                <select name="review_status" class="form-select form-select-sm" style="max-width: 120px;">
-                                                    <option value="approved">Approve</option>
-                                                    <option value="rejected">Reject</option>
-                                                </select>
-                                                <input type="text" name="admin_notes" class="form-control form-control-sm" placeholder="Notes" style="max-width: 170px;">
-                                                <button type="submit" class="btn btn-sm btn-dark">Save</button>
-                                            </form>
-                                            <?php else: ?>
-                                            <small class="text-muted"><?php echo htmlspecialchars($waiver['admin_notes'] ?? '', ENT_QUOTES, 'UTF-8'); ?></small>
-                                            <?php endif; ?>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                        <?php else: ?>
-                        <p class="text-muted mb-0">No waiver requests for this rental.</p>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <div class="modal fade" id="editRentalModal<?php echo $rental['id']; ?>" tabindex="-1" aria-labelledby="editRentalModalLabel<?php echo $rental['id']; ?>" aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <form method="POST" action="rentals.php" class="modal-content rental-form">
@@ -1257,12 +1183,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         updateRentalPreview(form);
     });
-
-    const viewRentalId = new URLSearchParams(window.location.search).get('view');
-    if (viewRentalId) {
-        const modal = document.getElementById(`viewRentalModal${viewRentalId}`);
-        if (modal) new bootstrap.Modal(modal).show();
-    }
 
     <?php if ($open_modal): ?>
     new bootstrap.Modal(document.getElementById('<?php echo $open_modal; ?>')).show();

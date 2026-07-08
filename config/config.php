@@ -244,6 +244,27 @@ function ensureRentalSchema($conn) {
         $conn->query("ALTER TABLE rental_payment_records ADD COLUMN waived_days INT NOT NULL DEFAULT 0 AFTER waived_amount");
     }
 
+    if (!tableExists($conn, 'rental_payment_submissions')) {
+        $conn->query("CREATE TABLE rental_payment_submissions (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            rental_id INT NOT NULL,
+            payment_record_id INT NOT NULL,
+            paid_date DATE NOT NULL,
+            amount_paid DECIMAL(10,2) NOT NULL DEFAULT 0,
+            receipt_photo VARCHAR(255),
+            source ENUM('customer', 'admin') NOT NULL DEFAULT 'customer',
+            status ENUM('pending', 'approved', 'rejected', 'void') NOT NULL DEFAULT 'pending',
+            notes TEXT,
+            admin_notes TEXT,
+            reviewed_by INT NULL,
+            reviewed_at DATETIME NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (rental_id) REFERENCES rentals(id) ON DELETE CASCADE,
+            FOREIGN KEY (payment_record_id) REFERENCES rental_payment_records(id) ON DELETE CASCADE
+        )");
+    }
+
     if (!tableExists($conn, 'rental_waiver_requests')) {
         $conn->query("CREATE TABLE rental_waiver_requests (
             id INT PRIMARY KEY AUTO_INCREMENT,

@@ -92,6 +92,27 @@ function paymentRecordPayableAmount($record) {
     return max(floatval($record['amount_due'] ?? 0) - floatval($record['waived_amount'] ?? 0), 0);
 }
 
+function paymentRecordBalanceAmount($record) {
+    return max(paymentRecordPayableAmount($record) - floatval($record['amount_paid'] ?? 0), 0);
+}
+
+function recordRentalPaymentSubmission($conn, $rental_id, $record_id, $paid_date, $amount_paid, $receipt_photo, $notes = '') {
+    $replace_stmt = $conn->prepare("UPDATE rental_payment_submissions
+                                    SET status = 'void', admin_notes = 'Replaced by newer customer submission'
+                                    WHERE payment_record_id = ?
+                                      AND status = 'pending'");
+    $replace_stmt->bind_param("i", $record_id);
+    $replace_stmt->execute();
+    $replace_stmt->close();
+
+    $stmt = $conn->prepare("INSERT INTO rental_payment_submissions
+                            (rental_id, payment_record_id, paid_date, amount_paid, receipt_photo, source, status, notes)
+                            VALUES (?, ?, ?, ?, ?, 'customer', 'pending', ?)");
+    $stmt->bind_param("iisdss", $rental_id, $record_id, $paid_date, $amount_paid, $receipt_photo, $notes);
+    $stmt->execute();
+    $stmt->close();
+}
+
 function waiverReasonOptions() {
     return [
         'sick' => 'Sick / Medical',
@@ -155,6 +176,14 @@ if (!$customer) {
 
 $customer_id = intval($customer['id']);
 
+$normalize_stmt = $conn->prepare("UPDATE rental_payment_records pr
+                                  JOIN rentals r ON pr.rental_id = r.id
+                                  SET pr.status = IF(pr.amount_paid >= GREATEST(pr.amount_due - pr.waived_amount, 0), 'paid', 'pending')
+                                  WHERE r.customer_id = ?");
+$normalize_stmt->bind_param("i", $customer_id);
+$normalize_stmt->execute();
+$normalize_stmt->close();
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $portal_action = portalInput($_POST['portal_action'] ?? '');
 
@@ -191,7 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $amount_paid = floatval($_POST['amount_paid'] ?? 0);
         $payment_notes = portalInput($_POST['payment_notes'] ?? '');
 
-        $record_stmt = $conn->prepare("SELECT pr.id, pr.amount_due, pr.waived_amount
+        $record_stmt = $conn->prepare("SELECT pr.id, pr.rental_id, pr.amount_due, pr.amount_paid, pr.waived_amount, pr.customer_receipt_photo
                                        FROM rental_payment_records pr
                                        JOIN rentals r ON pr.rental_id = r.id
                                        WHERE pr.id = ?
@@ -205,12 +234,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$payment_record || $paid_date === '') {
             $error = 'Selected unpaid record was not found.';
         } else {
+            $balance_amount = paymentRecordBalanceAmount($payment_record);
             if ($amount_paid <= 0) {
-                $amount_paid = paymentRecordPayableAmount($payment_record);
+                $amount_paid = $balance_amount;
             }
+            $amount_paid = min($amount_paid, $balance_amount);
 
-            $receipt_photo = uploadClaimReceipt('receipt_photo');
-            if (!$receipt_photo) {
+            $uploaded_receipt_photo = uploadClaimReceipt('receipt_photo');
+            $receipt_was_selected = !empty($_FILES['receipt_photo']['name']);
+            $receipt_photo = $uploaded_receipt_photo !== '' ? $uploaded_receipt_photo : ($payment_record['customer_receipt_photo'] ?? '');
+            if ($amount_paid <= 0) {
+                $error = 'This rental payment record has no outstanding balance.';
+            } elseif ($receipt_was_selected && $uploaded_receipt_photo === '') {
                 $error = 'Please upload a valid receipt file.';
             } else {
                 $stmt = $conn->prepare("UPDATE rental_payment_records
@@ -224,6 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->bind_param("ssdsi", $receipt_photo, $paid_date, $amount_paid, $payment_notes, $record_id);
                 $stmt->execute();
                 $stmt->close();
+                recordRentalPaymentSubmission($conn, intval($payment_record['rental_id']), $record_id, $paid_date, $amount_paid, $receipt_photo, $payment_notes);
 
                 header('Location: customer_portal.php?token=' . urlencode($token) . '&payment_submitted=1');
                 exit();
@@ -271,7 +307,7 @@ if (isset($_GET['submitted'])) {
     $success = 'Claim submitted. The office will review it.';
 }
 if (isset($_GET['payment_submitted'])) {
-    $success = 'Payment receipt uploaded. The office will review it.';
+    $success = 'Payment update submitted. The office will review it.';
 }
 if (isset($_GET['waiver_submitted'])) {
     $success = 'Waiver request submitted. The office will review it.';
@@ -432,7 +468,7 @@ $active_rentals = array_filter($rentals, function($rental) {
                                 <th>Car</th>
                                 <th>Period</th>
                                 <th>Due Date</th>
-                                <th>Amount</th>
+                                <th>Balance</th>
                                 <th>Receipt Review</th>
                                 <th>Status</th>
                                 <th>Action</th>
@@ -441,22 +477,30 @@ $active_rentals = array_filter($rentals, function($rental) {
                         <tbody>
                             <?php foreach ($unpaid_records as $record): ?>
                             <?php $payable_amount = paymentRecordPayableAmount($record); ?>
+                            <?php $balance_amount = paymentRecordBalanceAmount($record); ?>
                             <tr>
                                 <td><strong><?php echo e($record['plate_number']); ?></strong><br><small class="text-muted"><?php echo e($record['brand'] . ' ' . $record['model']); ?></small></td>
                                 <td><?php echo e(formatDate($record['period_start'])); ?> - <?php echo e(formatDate($record['period_end'])); ?></td>
                                 <td><?php echo e(formatDate($record['due_date'])); ?></td>
                                 <td>
-                                    <strong><?php echo e(formatCurrency($payable_amount)); ?></strong>
+                                    <strong><?php echo e(formatCurrency($balance_amount)); ?></strong>
+                                    <?php if (floatval($record['amount_paid'] ?? 0) > 0): ?>
+                                    <br><small class="text-success">Paid <?php echo e(formatCurrency($record['amount_paid'])); ?></small>
+                                    <?php endif; ?>
                                     <?php if (floatval($record['waived_amount'] ?? 0) > 0): ?>
                                     <br><small class="text-muted">Original <?php echo e(formatCurrency($record['amount_due'])); ?></small>
                                     <br><small class="text-success">Waived <?php echo e(formatCurrency($record['waived_amount'])); ?></small>
                                     <?php endif; ?>
                                 </td>
                                 <td><span class="badge <?php echo e(paymentProofStatusClass($record['customer_payment_status'] ?? 'none')); ?>"><?php echo e(paymentProofStatusLabel($record['customer_payment_status'] ?? 'none')); ?></span></td>
-                                <td><span class="badge bg-danger">Pending</span></td>
+                                <td>
+                                    <span class="badge <?php echo floatval($record['amount_paid'] ?? 0) > 0 ? 'bg-warning text-dark' : 'bg-danger'; ?>">
+                                        <?php echo floatval($record['amount_paid'] ?? 0) > 0 ? 'Partial' : 'Pending'; ?>
+                                    </span>
+                                </td>
                                 <td>
                                     <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#paymentReceiptModal<?php echo e($record['id']); ?>">
-                                        <i class="bi bi-upload me-1"></i>Upload Receipt
+                                        <i class="bi bi-pencil-square me-1"></i>Update Payment
                                     </button>
                                     <button type="button" class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#waiverModal">
                                         <i class="bi bi-file-earmark-medical me-1"></i>Appeal
@@ -475,6 +519,7 @@ $active_rentals = array_filter($rentals, function($rental) {
 
         <?php foreach ($unpaid_records as $record): ?>
         <?php $payable_amount = paymentRecordPayableAmount($record); ?>
+        <?php $balance_amount = paymentRecordBalanceAmount($record); ?>
         <div class="modal fade" id="paymentReceiptModal<?php echo e($record['id']); ?>" tabindex="-1" aria-hidden="true">
             <div class="modal-dialog">
                 <form method="POST" action="customer_portal.php" enctype="multipart/form-data" class="modal-content">
@@ -482,13 +527,16 @@ $active_rentals = array_filter($rentals, function($rental) {
                     <input type="hidden" name="token" value="<?php echo e($token); ?>">
                     <input type="hidden" name="record_id" value="<?php echo e($record['id']); ?>">
                     <div class="modal-header">
-                        <h5 class="modal-title">Upload Payment Receipt</h5>
+                        <h5 class="modal-title">Update Payment</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <p class="text-muted mb-1">Payable Amount</p>
-                            <h5><?php echo e(formatCurrency($payable_amount)); ?></h5>
+                            <p class="text-muted mb-1">Balance to Pay</p>
+                            <h5><?php echo e(formatCurrency($balance_amount)); ?></h5>
+                            <?php if (floatval($record['amount_paid'] ?? 0) > 0): ?>
+                            <div class="small text-success">Already paid <?php echo e(formatCurrency($record['amount_paid'])); ?></div>
+                            <?php endif; ?>
                             <?php if (floatval($record['waived_amount'] ?? 0) > 0): ?>
                             <div class="small text-muted">Original <?php echo e(formatCurrency($record['amount_due'])); ?>, waived <?php echo e(formatCurrency($record['waived_amount'])); ?></div>
                             <?php endif; ?>
@@ -500,12 +548,12 @@ $active_rentals = array_filter($rentals, function($rental) {
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Amount Paid (RM) <span class="text-danger">*</span></label>
-                                <input type="number" name="amount_paid" value="<?php echo e($payable_amount); ?>" step="0.01" min="0.01" class="form-control" required>
+                                <input type="number" name="amount_paid" value="<?php echo e($balance_amount); ?>" step="0.01" min="0.01" max="<?php echo e($balance_amount); ?>" class="form-control" required>
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Receipt <span class="text-danger">*</span></label>
-                            <input type="file" name="receipt_photo" accept="image/*,.pdf" class="form-control" required>
+                            <label class="form-label">Receipt</label>
+                            <input type="file" name="receipt_photo" accept="image/*,.pdf" class="form-control">
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Notes</label>
@@ -515,7 +563,7 @@ $active_rentals = array_filter($rentals, function($rental) {
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="submit" class="btn btn-dark">
-                            <i class="bi bi-upload me-2"></i>Submit Receipt
+                            <i class="bi bi-check-circle me-2"></i>Submit Update
                         </button>
                     </div>
                 </form>
